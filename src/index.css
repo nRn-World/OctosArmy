@@ -1,1 +1,26 @@
 @import "tailwindcss";
+
+@layer utilities {
+  .animate-text-sweep {
+    background: linear-gradient(
+      to right,
+      #059669 0%,     /* Darker emerald stringing the ends */
+      #00FF9D 20%,    /* BRIGHT neon green */
+      #10B981 40%,    /* Mid green */
+      #00FF9D 60%,    /* BRIGHT neon green */
+      #059669 80%,    /* Darker */
+      #00FF9D 100%
+    );
+    background-size: 200% auto;
+    color: transparent;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: textSweep 1.5s linear infinite;
+  }
+
+  @keyframes textSweep {
+    to {
+      background-position: 200% center;
+    }
+  }
+}

@@ -498,7 +498,7 @@ export default function App() {
             <Cpu className={`w-6 h-6 ${THEME.accent}`} />
           </div>
           <div>
-            <h1 className="text-xl font-bold tracking-tighter">Octos<span className={THEME.accent}>Army</span></h1>
+            <h1 className="text-xl font-bold tracking-tighter">Octos<span className="animate-text-sweep drop-shadow-[0_0_8px_rgba(0,255,157,0.5)]">Army</span></h1>
             <p className={`text-[10px] ${THEME.muted} uppercase tracking-widest`}>Multi-Agent Control System</p>
           </div>
         </div>
