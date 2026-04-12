@@ -1,0 +1,5 @@
+{
+  "name": "OctoSync AI",
+  "description": "A multi-agent AI orchestration platform for automated code analysis and repair within secure sandboxed environments.",
+  "requestFramePermissions": []
+}
