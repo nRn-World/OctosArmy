@@ -1,7 +1,7 @@
 {
   "name": "octosarmy",
   "author": "nRn World",
-  "description": "Fleragens Kontrollsystem för AI-driven filhantering",
+  "description": "Multi-Agent Control System för AI-driven filhantering",
   "private": false,
   "version": "1.0.0",
   "type": "module",

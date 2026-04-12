@@ -23,7 +23,7 @@ function createWindow() {
     minWidth: 1000,
     minHeight: 600,
     autoHideMenuBar: true,
-    title: "OctosArmy - Fleragens Kontrollsystem",
+    title: "OctosArmy - Multi-Agent Control System",
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true

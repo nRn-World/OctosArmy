@@ -499,7 +499,7 @@ export default function App() {
           </div>
           <div>
             <h1 className="text-xl font-bold tracking-tighter">Octos<span className={THEME.accent}>Army</span></h1>
-            <p className={`text-[10px] ${THEME.muted} uppercase tracking-widest`}>Fleragens Kontrollsystem</p>
+            <p className={`text-[10px] ${THEME.muted} uppercase tracking-widest`}>Multi-Agent Control System</p>
           </div>
         </div>
 
