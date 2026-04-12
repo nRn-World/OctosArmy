@@ -256,7 +256,7 @@ async function startServer() {
       /\/$/,
       ""
     );
-    const ollamaModel = (process.env.OLLAMA_MODEL || "gemma3:4b").trim();
+    const ollamaModel = (process.env.OLLAMA_MODEL || "gemma4:e4b").trim();
     const maxSteps = parseInt(process.env.OCTOSARMY_MAX_STEPS || "200", 10);
     const terminalTimeoutSec = parseInt(process.env.OCTOSARMY_TERMINAL_TIMEOUT || "120", 10);
     const maxTerminalOutputChars = parseInt(
