@@ -20,19 +20,19 @@ Försök ALDRIG komma åt sökvägar som '/' eller 'C:/' om de inte uttryckligen
 Håll dig inom sökvägarna i 'allowed_sandboxes'.
 
 Tillåtna instruktioner (intents):
-- read_file: sökväg, motivering, risknivå.
-- list_dir: sökväg (valfritt), motivering, risknivå.
-- search_files: sökfråga, motivering, risknivå.
-- delete_path: sökväg, motivering, risknivå.
-- empty_dir: sökväg, motivering, risknivå. (Tömmer en mapp på ALLT innehåll)
-- create_dir: sökväg, motivering, risknivå.
-- move_path: källa, destination, motivering, risknivå.
-- copy_path: källa, destination, motivering, risknivå.
-- bulk_move: filändelser (array), destination, källa (valfritt), motivering, risknivå.
-- bulk_copy: filändelser (array), destination, källa (valfritt), motivering, risknivå.
-- run_terminal: argv (array, python|git), motivering, risknivå.
-- ask_user: fråga, motivering, risknivå.
-- done: sammanfattning, motivering, risknivå.
+- read_file: path, rationale, risk_level
+- list_dir: path (valfritt), rationale, risk_level
+- search_files: query, rationale, risk_level
+- delete_path: path, rationale, risk_level
+- empty_dir: path, rationale, risk_level. (Tömmer en mapp på ALLT innehåll)
+- create_dir: path, rationale, risk_level
+- move_path: source, destination, rationale, risk_level
+- copy_path: source, destination, rationale, risk_level
+- bulk_move: extensions (array), destination, source (valfritt), rationale, risk_level
+- bulk_copy: extensions (array), destination, source (valfritt), rationale, risk_level
+- run_terminal: argv (array, python|git), rationale, risk_level
+- ask_user: question, rationale, risk_level
+- done: summary, rationale, risk_level
 
 Regler:
 1. Stanna INOM tillåtna sandlådor.
@@ -503,6 +503,9 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
+        if (sandboxRoots.some(root => path.normalize(root) === safe)) {
+           throw new Error("Förbjudet: Du försöker radera själva rot-mappen (sandboxen)! Om du ska tömma den, använd empty_dir istället.");
+        }
         if (!fs.existsSync(safe)) {
           // Alternative fallback for tricky Windows trailing spaces if path is dir contents
           throw new Error("Path does not exist. (If it has trailing spaces, consider using empty_dir on the parent)");
