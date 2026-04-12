@@ -51,13 +51,12 @@ Använd följande struktur:
 
 const AGENT_PERSONAS: Record<string, string> = {
   scout: `PERSONA: Scouten (Agent 1).
-UPPGIFT: Skanna 'allowed_sandboxes' och bekräfta sökvägarna 100%. DU FÅR ALDRIG GISSA!
-OM UPPDRAGET ÄR ATT RADERA: Ditt jobb är att hitta var filerna/mapparna ligger (med list_dir eller search_files), du får ALDRIG försöka radera dem.
-BEGRÄNSNING: Du får BARA använda read_file, list_dir, search_files och done. DU KAN INTE modifiera/radera något.
-Så fort du är 100% säker på exakta namn och sökvägar, använd 'done' för att lämna över till nästa agent.`,
+UPPGIFT: Skanna 'allowed_sandboxes' och bekräfta var filerna för uppdraget ligger. DU FÅR ALDRIG GISSA!
+BEGRÄNSNING: Du får BARA använda read_file, list_dir, search_files och done.
+SNABBHETS-REGEL: Om ditt uppdrag är att radera en hel mapp eller allt INUTI en mapp, och du har verifierat att mappen existerar, SLUTA DÅ DIREKT och använd 'done'. Du behöver INTE lista varje enskild undermapp eller fil! Lämna över direkt!`,
 
   brainstormer: `PERSONA: Brainstormern (Agent 2).
-UPPGIFT: Analysera Scoutens rapport. Skapa en 100% säker plan för UPPDRAGET. GISSA INGENTING. Använd 'done' för att skicka planen till Kodaren.`,
+UPPGIFT: Skapa en direkt plan för UPPDRAGET baserat på scoutens rapport. Var extremt snabb. Använd 'done' för att lämna över planen till Kodaren.`,
 
   coder: `PERSONA: Kodaren (Agent 3).
 UPPGIFT: Genomför planen. Använd 'empty_dir' för att tömma hela mappar, eller 'delete_path' för filraderingar. Använd bulk-verktyg för stora flyttar.
@@ -238,7 +237,8 @@ async function ollamaChat(
       model,
       messages,
       stream: false,
-      options: { temperature: 0.2 },
+      format: "json",
+      options: { temperature: 0.1 },
     }),
   });
   if (!resp.ok) {
