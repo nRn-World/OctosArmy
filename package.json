@@ -3,13 +3,13 @@
   "author": "nRn World",
   "description": "Multi-Agent Control System för AI-driven filhantering",
   "private": false,
-  "version": "1.0.0",
+  "version": "1.1.19",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
     "dev": "tsx server.ts",
-    "dev:electron": "vite build && esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js && electron .",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/server.js",
+    "dev:electron": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.js && electron .",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --external:vite --external:electron --outfile=dist/server.js",
     "dist": "vite build && npm run build:server && electron-builder --win",
     "clean": "rm -rf dist release"
   },
@@ -22,13 +22,17 @@
     "win": {
       "target": [
         "nsis"
-      ]
+      ],
+      "icon": "Logo/OSAI-no-bg.ico"
     },
     "nsis": {
-      "oneClick": true,
-      "perMachine": false,
-      "allowToChangeInstallationDirectory": false,
-      "runAfterFinish": true
+      "oneClick": false,
+      "perMachine": true,
+      "allowToChangeInstallationDirectory": true,
+      "runAfterFinish": true,
+      "shortcutName": "OctosArmy",
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     },
     "publish": [
       {
@@ -39,7 +43,27 @@
     ],
     "files": [
       "dist/**/*",
-      "electron-main.js"
+      "electron-main.js",
+      "preload.js"
+    ],
+    "extraResources": [
+      {
+        "from": "dist/server.js",
+        "to": "server.js"
+      },
+      {
+        "from": "preload.js",
+        "to": "preload.js"
+      },
+      {
+        "from": "dist",
+        "to": "dist",
+        "filter": [
+          "**/*",
+          "!server.js"
+        ]
+      },
+      ".env"
     ]
   },
   "dependencies": {

@@ -1,0 +1,34 @@
+name: Bug Report
+description: Rapport om ett fel eller problem i OctosArmy.
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tack för att du rapporterar en bugg! Ge oss så mycket info som möjligt.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: Vad hände?
+      description: Beskriv felet kortfattat.
+      placeholder: T.ex. "När jag klickar på lägg till mapp så kraschar det."
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction-steps
+    attributes:
+      label: Steg för att återskapa felet
+      description: Hur får man felet att hända?
+      placeholder: |
+        1. Starta programmet
+        2. Klicka på...
+        3. Se felet...
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: OctosArmy Version
+      description: Vilken version kör du (t.ex. v1.1.19)?
+    validations:
+      required: true

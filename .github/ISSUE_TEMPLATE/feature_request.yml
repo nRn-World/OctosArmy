@@ -1,0 +1,16 @@
+name: Feature Request
+description: Föreslå en ny idé för OctosArmy.
+labels: [enhancement]
+body:
+  - type: textarea
+    id: feature-description
+    attributes:
+      label: Beskriv din idé
+      description: Vad vill du att programmet ska kunna göra?
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Varför behövs detta?
+      description: Hur skulle detta hjälpa användare?

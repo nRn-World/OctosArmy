@@ -18,9 +18,8 @@ export function apiUrl(path: string): string {
   if (typeof window !== "undefined") {
     const port = window.location.port;
     const vitePorts = new Set(["5173", "5174", "4173"]);
-    if (vitePorts.has(port)) {
-      const host = window.location.hostname;
-      return `http://${host}:3000${normalized}`;
+    if (vitePorts.has(port) || window.location.protocol === "file:") {
+      return `http://127.0.0.1:3000${normalized}`;
     }
   }
 

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
+import logoImg from "../Logo/OSAI-no-bg (1).ico";
 import { 
-  Shield, 
   Terminal, 
   Play, 
   Settings, 
@@ -14,7 +14,8 @@ import {
   RefreshCw,
   Trash2,
   ChevronRight,
-  ChevronDown
+  ChevronDown,
+  Shield
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
@@ -72,6 +73,7 @@ export default function App() {
   const [showConfirm2, setShowConfirm2] = useState(false);
   const [timer1, setTimer1] = useState(0);
   const [timer2, setTimer2] = useState(0);
+  const [isAddingRoot, setIsAddingRoot] = useState(false);
 
   const DAYS = [
     { id: 1, label: "Mån" },
@@ -216,10 +218,16 @@ export default function App() {
 
   const fetchWorkspace = async () => {
     try {
+      if ((window as any).electron) {
+        const roots = await (window as any).electron.getRoots();
+        setWorkspaceRoots(roots || []);
+        const workspaces = await (window as any).electron.getWorkspace();
+        setWorkspaceFiles(workspaces || []);
+        return;
+      }
       const res = await fetch(apiUrl("/api/workspace"));
       const data = (await parseJsonResponse(res)) as { workspaces: {root: string, files: string[]}[] };
       setWorkspaceFiles(data.workspaces || []);
-      
       const rRes = await fetch(apiUrl("/api/workspace/roots"));
       const rData = await rRes.json();
       setWorkspaceRoots(rData.roots || []);
@@ -229,60 +237,76 @@ export default function App() {
   };
 
   const addWorkspacePath = async (pathToAdd: string) => {
-    const p = pathToAdd.trim();
-    if (!p) return;
-    
-    if (workspaceRoots.includes(p)) {
-      addLog({
-        timestamp: new Date().toISOString(),
-        agent: "System",
-        message: "Denna mapp finns redan i listan.",
-        type: "warning",
-      });
-      return;
-    }
-
-    if (workspaceRoots.length >= 6) {
-      addLog({
-        timestamp: new Date().toISOString(),
-        agent: "System",
-        message: "Maxgräns på 6 mappar uppnådd. Ta bort en mapp innan du lägger till en ny.",
-        type: "error",
-      });
-      return;
-    }
-
-    const newRoots = [...workspaceRoots, p];
+    let p = pathToAdd.trim();
+    if (!p || isAddingRoot) return;
+    setIsAddingRoot(true);
+    p = p.replace(/[\\/]+$/, "");
     try {
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Lägger till mapp: ${p}...`,
+        type: "info",
+      });
+      if ((window as any).electron) {
+        const newRoots = await (window as any).electron.setRoots([...workspaceRoots, p]);
+        setWorkspaceRoots(newRoots);
+        setNewRootPath("");
+        addLog({
+          timestamp: new Date().toISOString(),
+          agent: "System",
+          message: `KLART! Behörighet beviljad för: ${p}`,
+          type: "success",
+        });
+        await fetchWorkspace();
+        return;
+      }
       const res = await fetch(apiUrl("/api/workspace/roots"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ roots: newRoots }),
+        body: JSON.stringify({ roots: [...workspaceRoots, p] }),
       });
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Serverfel");
+      }
       const data = await res.json();
-      if (!res.ok) throw new Error(data.error);
       setWorkspaceRoots(data.roots);
       setNewRootPath("");
       addLog({
         timestamp: new Date().toISOString(),
         agent: "System",
-        message: `Behörighet tillagd: ${p}`,
+        message: `KLART! Behörighet beviljad för: ${p}`,
         type: "success",
       });
-      await fetchWorkspace();
+      setTimeout(() => fetchWorkspace(), 200);
     } catch (e: any) {
       addLog({
         timestamp: new Date().toISOString(),
         agent: "System",
-        message: `Kunde inte lägga till mapp: ${e.message}`,
+        message: `Fel: ${e.message}`,
         type: "error",
       });
+    } finally {
+      setIsAddingRoot(false);
     }
   };
 
   const removeWorkspacePath = async (p: string) => {
-    const newRoots = workspaceRoots.filter(r => r !== p);
     try {
+      const newRoots = workspaceRoots.filter(r => r !== p);
+      if ((window as any).electron) {
+        const updated = await (window as any).electron.setRoots(newRoots);
+        setWorkspaceRoots(updated);
+        addLog({
+          timestamp: new Date().toISOString(),
+          agent: "System",
+          message: `Behörighet borttagen: ${p}`,
+          type: "info",
+        });
+        await fetchWorkspace();
+        return;
+      }
       const res = await fetch(apiUrl("/api/workspace/roots"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -304,11 +328,27 @@ export default function App() {
 
   const handleBrowseFolder = async () => {
     try {
+      // Use the secure bridge from preload.js
+      if ((window as any).electron && (window as any).electron.pickFolder) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          agent: "System",
+          message: "Öppnar inbyggd mappväljare...",
+          type: "info"
+        });
+        const pickedPath = await (window as any).electron.pickFolder();
+        if (pickedPath) {
+          setNewRootPath(pickedPath);
+          addWorkspacePath(pickedPath);
+        }
+        return;
+      }
+      
+      // Fallback to API (for browser/dev mode)
       const res = await fetch(apiUrl("/api/workspace/pick"), { method: "POST" });
       const data = await res.json();
       if (data.path) {
         setNewRootPath(data.path);
-        // Automatically add it too
         addWorkspacePath(data.path);
       }
     } catch (e: any) {
@@ -328,24 +368,28 @@ export default function App() {
       const res = await fetch(apiUrl("/api/logs"));
       const data = await res.json();
       if (Array.isArray(data)) {
-        // Only keep the most recent 500 logs in the UI for performance
         setLogs(data.slice(-500));
       }
     } catch (e) {
-      console.error("Failed to fetch logs:", e);
+      // Server not ready yet – silently ignore
     } finally {
       setIsFetchingLogs(false);
     }
   };
 
   const addLog = async (log: AgentLog) => {
-    // Send to server so it persists across polls
-    await fetch(apiUrl("/api/logs"), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(log)
-    });
-    fetchLogs();
+    // Always update local UI immediately
+    setLogs(prev => [...prev.slice(-499), log]);
+    // Try to sync to server (best-effort)
+    try {
+      await fetch(apiUrl("/api/logs"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(log)
+      });
+    } catch (e) {
+      // Server not ready – log is still shown locally
+    }
   };
 
   const testAIConnection = async () => {
@@ -471,8 +515,12 @@ export default function App() {
   };
 
   const clearLogs = async () => {
-    await fetch(apiUrl("/api/logs/clear"), { method: "POST" });
     setLogs([]);
+    try {
+      await fetch(apiUrl("/api/logs/clear"), { method: "POST" });
+    } catch (e) {
+      // Server sync failed – local clear is sufficient
+    }
   };
 
   const updateSchedule = async () => {
@@ -494,9 +542,11 @@ export default function App() {
       {/* Header */}
       <header className={`h-16 border-b ${THEME.border} flex items-center justify-between px-6 sticky top-0 z-50 ${THEME.bg}`}>
         <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-lg ${THEME.accentBg} bg-opacity-10`}>
-            <Cpu className={`w-6 h-6 ${THEME.accent}`} />
-          </div>
+          <img
+            src={logoImg}
+            alt="OctosArmy Logo"
+            className="w-14 h-14 scale-[1.8] object-contain"
+          />
           <div>
             <h1 className="text-xl font-bold tracking-tighter">Octos<span className="animate-text-sweep drop-shadow-[0_0_8px_rgba(0,255,157,0.5)]">Army</span></h1>
             <p className={`text-[10px] ${THEME.muted} uppercase tracking-widest`}>Multi-Agent Control System</p>
@@ -562,9 +612,14 @@ export default function App() {
                   </button>
                   <button 
                     onClick={() => addWorkspacePath(newRootPath)}
-                    className={`px-5 py-2.5 rounded-lg bg-[#00FF9D] text-black text-xs font-black transition-all hover:scale-105 active:scale-95 shadow-[0_4px_15px_rgba(0,255,157,0.2)]`}
+                    disabled={isAddingRoot}
+                    className={`px-5 py-2.5 rounded-lg text-xs font-black transition-all ${
+                      isAddingRoot 
+                        ? "bg-yellow-500 text-black cursor-wait" 
+                        : "bg-[#00FF9D] text-black hover:scale-105 active:scale-95 shadow-[0_4px_15px_rgba(0,255,157,0.2)]"
+                    }`}
                   >
-                    LÄGG TILL
+                    {isAddingRoot ? "LÄGGER TILL..." : "LÄGG TILL"}
                   </button>
                 </div>
               </div>
@@ -1002,7 +1057,7 @@ export default function App() {
                   </button>
                 )}
               </div>
-              <span className={`text-[9px] ${THEME.muted}`}>v1.0.4-STABLE</span>
+              <span className={`text-[9px] ${THEME.muted}`}>v1.1.18-STABLE</span>
             </div>
           </section>
         </div>
