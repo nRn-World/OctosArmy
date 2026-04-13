@@ -39,38 +39,40 @@ Regler:
 2. För agenter med skrivbehörighet: Använd 'delete_path', 'bulk_move' etc.
 3. Risknivå ska vara: low, medium eller high.
 4. DU FÅR ALDRIG GISSA SÖKVÄGAR. Du måste vara 100% säker! Verifiera med list_dir/search_files om du är osäker. Systemet kräver PERFEKTION, inga gissningar!
-5. VIKTIGT: Du MÅSTE svara med EXAKT ETT GILTIGT JSON-OBJEKT och ingenting annat! Ingen markdown, ingen text före eller efter.
-Använd följande struktur:
+VIKTIGT: Du MÅSTE svara med EXAKT ETT GILTIGT JSON-OBJEKT! Ingen markdown.
+Använd denna struktur:
 {
   "intent": "namn_på_intent",
-  "rationale": "kort motivering till varför du gör detta",
+  "rationale": "varför",
   "risk_level": "low",
-  "...": "lägg till övriga parametrar som sökväg (path), källa (source), etc. här"
+  "path": "sökväg (om det behövs)",
+  "summary": "sammanfattning (om intent är 'done')"
 }
 `;
 
 const AGENT_PERSONAS: Record<string, string> = {
   scout: `PERSONA: Scouten (Agent 1).
-UPPGIFT: Skanna 'allowed_sandboxes' och bekräfta var filerna för uppdraget ligger. DU FÅR ALDRIG GISSA!
-BEGRÄNSNING: Du får BARA använda read_file, list_dir, search_files och done.
-SNABBHETS-REGEL: Om ditt uppdrag är att radera en hel mapp eller allt INUTI en mapp, och du har verifierat att mappen existerar, SLUTA DÅ DIREKT och använd 'done'. Du behöver INTE lista varje enskild undermapp eller fil! Lämna över direkt!`,
+UPPGIFT: Din uppgift är att skanna 'allowed_sandboxes' och bekräfta var filerna för uppdraget ligger. 
+INSTRUKTION: När du har hittat målet, lämna över till Agent 2 (Brainstormern) genom att använda 'done'. Berätta exakt vad du hittade.`,
 
   brainstormer: `PERSONA: Brainstormern (Agent 2).
-UPPGIFT: Skapa en direkt plan för UPPDRAGET baserat på scoutens rapport. Var extremt snabb. Använd 'done' för att lämna över planen till Kodaren.`,
+UPPGIFT: Skapa en plan för hur uppdraget ska utföras baserat på Scoutens rapport. 
+INSTRUKTION: Skicka planen vidare till Agent 3 (Kodaren) med 'done'.`,
 
   coder: `PERSONA: Kodaren (Agent 3).
-UPPGIFT: Genomför planen. Använd 'empty_dir' för att tömma hela mappar, eller 'delete_path' för filraderingar. Använd bulk-verktyg för stora flyttar.
-Kör tills uppdraget är 100% klart. DU FÅR ABSOLUT INTE GISSA! Om du gör ett litet fel kraschar systemet.`,
+UPPGIFT: Genomför det praktiska arbetet (radera, flytta, skapa etc). 
+INSTRUKTION: När du är klar, berätta vad du har gjort och lämna över till Agent 4 (Granskaren) med 'done'.`,
 
   reviewer: `PERSONA: Granskaren (Agent 4).
-UPPGIFT: Kontrollera att Kodaren faktiskt har gjort det som står i UPPDRAGET. 
-Om filer som borde vara borta fortfarande finns kvar, skicka tillbaka till Kodaren.`,
+UPPGIFT: Du är kontrollanten. Analysera historiken. Har Agent 1 och Agent 3 gjort rätt?
+DIN MAKT: Om arbetet är 100% korrekt, använd 'done' för att skicka till Agent 5 (Auditören). 
+KRITISKT: Om något saknas eller är fel, använd 'done' men skriv i summary: "REJECTED: [varför]". Då tvingas Agent 1 att börja om med din lösning!`,
 
   auditor: `PERSONA: Auditören (Agent 5).
-UPPGIFT: Sammanfatta resultatet. Berätta för användaren exakt vad som har raderats/flyttats/fixats.`,
+UPPGIFT: Berätta för användaren att allt är klart och sammanfatta resultatet snyggt.`,
 
   security: `PERSONA: Säkerhetsspecialisten (Agent 6).
-UPPGIFT: Säkerställ att inga filer utanför målområdet rördes. Markera sedan uppdraget som 'done'.`
+UPPGIFT: Berätta i detalj vad alla agenter (1-2-3-4-5) har gjort. Du ska ge en slutrapport för uppdraget.`
 };
 
 function isPathInsideRoot(workspaceRoot: string, absolutePath: string): boolean {
@@ -207,8 +209,11 @@ function validateEnvelope(obj: Record<string, unknown>): void {
   if (!["low", "medium", "high"].includes(obj.risk_level as string)) {
     throw new Error("risk_level must be low, medium, or high");
   }
-  if (intent === "done" && !String(obj.summary || "").trim()) {
-    throw new Error("done requires a non-empty summary");
+  if (intent === "done") {
+    // If summary is missing, fallback to rationale to prevent infinite retry loops
+    if (!obj.summary || !String(obj.summary).trim()) {
+      obj.summary = obj.rationale || "Task completed successfully.";
+    }
   }
   if (intent === "ask_user" && !String(obj.question || "").trim()) {
     throw new Error("ask_user requires question");
@@ -367,6 +372,20 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     log(`[${currentAgentName}] Intent: ${intent} (${obj.risk_level}) — ${obj.rationale}`, "info", currentAgentId);
 
     if (intent === "done") {
+      const summary = String(obj.summary || "");
+      
+      // LOGIC: If Reviewer (Agent 4) rejects the work, send back to Scout (Agent 1)
+      if (currentAgentId === "reviewer" && summary.toUpperCase().includes("REJECTED")) {
+        log(`REVIEW REJECTED: ${summary}. Restarting from Scout (Agent 1)...`, "warning", currentAgentId);
+        currentAgentIndex = 0; // Back to Scout
+        messages[0].content = `${SYSTEM_PROMPT_BASE}\n\nMISSION OBJECTIVE: ${mission}\n\nCURRENT AGENT CONFIGURATION:\n${AGENT_PERSONAS[agentSequence[0]]}`;
+        messages.push({
+          role: "user",
+          content: `CRITICAL FEEDBACK FROM REVIEWER: ${summary}\n\nPlease start again and solve the issue described above.`,
+        });
+        continue;
+      }
+
       if (currentAgentIndex < agentSequence.length - 1) {
         currentAgentIndex++;
         const nextAgentId = agentSequence[currentAgentIndex];
@@ -378,7 +397,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
         
         messages.push({
           role: "user",
-          content: `ACTION: ${currentAgentName} is done. Now it's your turn, ${nextAgentName}. Use the shared history to continue the mission.`,
+          content: `ACTION: ${currentAgentName} is done with result: ${summary}. Now it's your turn, ${nextAgentName}. Use the shared history to continue the mission.`,
         });
         continue;
       } else {

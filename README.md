@@ -1,35 +1,76 @@
-# OctosArmy 🐙
+# 🤖 OctosArmy: Multi-Agent Control System
 
-Ett kraftfullt, fler-agents kontrollsystem för AI-driven filhantering. OctosArmy använder specifikt tränade drönar-agenter för att övervaka, hantera, städa och administrera filer i sandlåde-miljöer utan risk för systemkrascher.
+![Banner](screenshots/Start.png)
 
-## Funktioner
-- 🛡️ **Säker Sandlåda (Sandboxing)** - Agenterna kan aldrig komma åt filer eller mappar som du inte uttryckligen har aktiverat rötter för.
-- 🤖 **Elit-Teamet** - Agenterna är indelade i specialiserade roller (Scout, Brainstormer, Kodare, Granskare, Auditör, Säkerhetsspecialist) med strenga instruktioner om att ALDRIG gissa sig fram.
-- ♻️ **Sömlös Integration** - Byggd på Node.js, React och integrerad i Windows som en tyst bakgrundsapp (Electron).
-- 🤫 **Automatiska Uppdateringar** - Bakgrundsuppdateringar som installerar sig själva ifrån GitHub, helt utan brandväggsvarningar eller extra klick.
-
-## Installation för Användare
-1. Ladda ner \`OctosArmy Setup.exe\` från under fliken [Releases](https://github.com/nRn-World/OctosArmy/releases).
-2. Starta programmet (Installerar utan frågor och startar tyst i bakgrunden, nås via ett fönster).
-3. Uppdateringar laddas automatisk ned och installeras när programmet startas upp.
-
-## För Utvecklare (Open Source)
-Vill du vara med och bygga tillsammans med oss och hundratals andra utvecklare? Läs \`CONTRIBUTING.md\`!
-
-### Kom igång lokalt
-1. Klona repot: \`git clone https://github.com/nRn-World/OctosArmy.git\`
-2. Installera beroenden: \`npm install\`
-3. Lägg till din egna \`.env\`-fil baserat på \`.env.example\`
-4. Kör utvecklingsmiljön med inbyggd Electron: \`npm run dev:electron\`
-5. Bygg .exe-fil för produktion: \`npm run dist\`
+**OctosArmy** är en kraftfull, AI-driven filhanteringsplattform som använder ett team av autonoma agenter för att utföra komplexa uppdrag i din Windows-miljö. Med avancerad "Command & Control"-logik och en säker sandlåda ger OctosArmy dig full kontroll över din data medan AI:n gör grovjobbet.
 
 ---
 
-## Byggt med
-- **Electron** & **React** (Vite)
-- **Express.js** & **TypeScript**
-- **Ollama** / **LLM-modeller**
-- **Tailwind CSS**
+## ✨ Nyckelfunktioner
 
-## Licens
-MIT-licens. Läs \`LICENSE\` för mer information.
+*   **Hierarkiskt Agent-team:** Scout, Brainstormer, Kodare, Granskare, Auditör och Säkerhetsspecialist samarbetar för att lösa dina uppgifter.
+*   **Säker Sandlåda (Mappbehörighet):** AI-agenterna kan *endast* röra mappar som du uttryckligen har gett dem tillåtelse till.
+*   **Självkorrigerande logik:** Om Agent 4 (Granskaren) inte är nöjd med arbetet skickas uppdraget automatiskt tillbaka till Agent 1 för omstart.
+*   **Lokal AI-motor:** All processering sker lokalt på din dator via Ollama för maximal integritet.
+*   **Avancerad Schemaläggning:** Kör dina AI-pipelines automatiskt baserat på tid eller händelser.
+
+---
+
+## 📸 Screenshots
+
+### Dashboard & Arbetsytor
+![Start Screen](screenshots/Start2.png)
+*Håll koll på dina mappar och behörigheter i realtid.*
+
+### Agent-konfiguration
+![Agents](screenshots/Agents.png)
+*Se hur de olika agenterna arbetar tillsammans i kedjan.*
+
+### Uppdragskonsol
+![Mission Progress](screenshots/Finish.png)
+*Detaljerad loggning av varje steg agenterna tar.*
+
+---
+
+## 🚀 Kom igång (Viktigt!)
+
+OctosArmy kräver en lokal AI-hjärna för att fungera.
+
+### 1. Installera Ollama
+Ladda ner och installera **Ollama** från [ollama.com](https://ollama.com).
+
+### 2. Ladda ner Gemma 4
+Öppna din terminal (PowerShell eller CMD) och kör följande kommando för att ladda ner agenternas språkmodell:
+```bash
+ollama run gemma4:e4b
+```
+
+### 3. Installera OctosArmy
+Ladda ner den senaste versionen från [Releases](../../releases) och kör `OctosArmy Setup.exe`.
+
+---
+
+## 🛠 Teknikstack
+*   **Frontend:** React, Tailwind CSS, Framer Motion
+*   **Backend:** Node.js (Express), Electron
+*   **AI:** Ollama (Gemma 4 integration)
+*   **Infrastruktur:** IPC Bridge för säker Windows-kommunikation
+
+---
+
+## 🤝 Community & Bidrag
+Vi välkomnar bidrag! OctosArmy är byggt för att växa.
+*   Hittat en bugg? Öppna en [Issue](../../issues).
+*   Vill du bidra med kod? Se vår [CONTRIBUTING.md](CONTRIBUTING.md).
+
+---
+
+## 🛡 Säkerhet
+Din integritet är vår prioritet. Eftersom OctosArmy körs lokalt skickas ingen fildata till molnet. Läs mer i vår [SECURITY.md](SECURITY.md).
+
+---
+
+<p align="center">
+  <i>Utvecklat med kärlek av nRn World</i><br>
+  <b>v1.1.21-STABLE</b>
+</p>
