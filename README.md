@@ -1,6 +1,6 @@
 # 🤖 OctosArmy: Multi-Agent Control System
 
-![Banner](screenshots/Start.png)
+![Banner](Screenshots/Start.png)
 
 **OctosArmy** är en kraftfull, AI-driven filhanteringsplattform som använder ett team av autonoma agenter för att utföra komplexa uppdrag i din Windows-miljö. Med avancerad "Command & Control"-logik och en säker sandlåda ger OctosArmy dig full kontroll över din data medan AI:n gör grovjobbet.
 
@@ -19,15 +19,15 @@
 ## 📸 Screenshots
 
 ### Dashboard & Arbetsytor
-![Start Screen](screenshots/Start2.png)
+![Start Screen](Screenshots/Start2.png)
 *Håll koll på dina mappar och behörigheter i realtid.*
 
 ### Agent-konfiguration
-![Agents](screenshots/Agents.png)
+![Agents](Screenshots/Agents.png)
 *Se hur de olika agenterna arbetar tillsammans i kedjan.*
 
 ### Uppdragskonsol
-![Mission Progress](screenshots/Finish.png)
+![Mission Progress](Screenshots/Finish.png)
 *Detaljerad loggning av varje steg agenterna tar.*
 
 ---
