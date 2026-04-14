@@ -13,6 +13,8 @@
 *   **Självkorrigerande logik:** Om Agent 4 (Granskaren) inte är nöjd med arbetet skickas uppdraget automatiskt tillbaka till Agent 1 för omstart.
 *   **Lokal AI-motor:** All processering sker lokalt på din dator via Ollama för maximal integritet.
 *   **Avancerad Schemaläggning:** Kör dina AI-pipelines automatiskt baserat på tid eller händelser.
+*   **Körs i Bakgrunden:** Minimeras till systemfältet (System Tray) för att tyst övervaka och köra uppdrag enligt schema utan att störa dig.
+*   **Sömlösa Uppdateringar:** Inbyggd auto-updater med UI-notiser som laddar ner nya versioner automatiskt i bakgrunden.
 
 ---
 
@@ -104,5 +106,4 @@ Din integritet är vår prioritet. Eftersom OctosArmy körs lokalt skickas ingen
 
 <p align="center">
   <i>Utvecklat med kärlek av nRn World</i><br>
-  <b>v1.1.22-STABLE</b>
 </p>
