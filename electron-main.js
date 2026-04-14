@@ -179,6 +179,24 @@ function createWindow() {
 app.whenReady().then(() => {
   createWindow();
 
+  if (isPackaged) {
+    autoUpdater.checkForUpdatesAndNotify();
+    
+    autoUpdater.on('update-downloaded', (info) => {
+      dialog.showMessageBox({
+        type: 'info',
+        title: 'Uppdatering tillgänglig',
+        message: `Version ${info.version} har laddats ner och är redo att installeras. Vill du starta om och uppdatera nu?`,
+        buttons: ['Starta om nu', 'Senare']
+      }).then((result) => {
+        if (result.response === 0) {
+          isQuitting = true;
+          autoUpdater.quitAndInstall();
+        }
+      });
+    });
+  }
+
   const iconPath = path.join(__dirname, 'Logo', 'OSAI-no-bg.ico');
   tray = new Tray(iconPath);
 
