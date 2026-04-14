@@ -69,6 +69,11 @@ let isQuitting = false;
 
 // --- IPC HANDLERS ---
 
+ipcMain.on('restart-and-install', () => {
+  isQuitting = true;
+  autoUpdater.quitAndInstall();
+});
+
 ipcMain.handle('pick-folder', async () => {
   const result = await dialog.showOpenDialog(mainWindow, {
     properties: ['openDirectory', 'createDirectory'],
@@ -180,20 +185,30 @@ app.whenReady().then(() => {
   createWindow();
 
   if (isPackaged) {
+    autoUpdater.logger = log;
     autoUpdater.checkForUpdatesAndNotify();
-    
+
+    autoUpdater.on('checking-for-update', () => {
+      log.info('Kontrollerar efter uppdateringar...');
+    });
+
+    autoUpdater.on('update-available', (info) => {
+      log.info('Uppdatering tillgänglig: ' + info.version);
+      mainWindow?.webContents.send('update-available', info);
+    });
+
+    autoUpdater.on('update-not-available', (info) => {
+      log.info('Ingen uppdatering. Nuvarande version: ' + info.version);
+    });
+
     autoUpdater.on('update-downloaded', (info) => {
-      dialog.showMessageBox({
-        type: 'info',
-        title: 'Uppdatering tillgänglig',
-        message: `Version ${info.version} har laddats ner och är redo att installeras. Vill du starta om och uppdatera nu?`,
-        buttons: ['Starta om nu', 'Senare']
-      }).then((result) => {
-        if (result.response === 0) {
-          isQuitting = true;
-          autoUpdater.quitAndInstall();
-        }
-      });
+      log.info('Uppdatering nedladdad: ' + info.version);
+      mainWindow?.webContents.send('update-downloaded', info);
+    });
+
+    autoUpdater.on('error', (err) => {
+      log.error('Auto-updater fel: ' + err.message);
+      mainWindow?.webContents.send('update-error', err.message);
     });
   }
 

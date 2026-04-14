@@ -75,6 +75,10 @@ export default function App() {
   const [timer2, setTimer2] = useState(0);
   const [isAddingRoot, setIsAddingRoot] = useState(false);
 
+  // Update states
+  const [updateDownloaded, setUpdateDownloaded] = useState<{version: string} | null>(null);
+  const [updateAvailable, setUpdateAvailable] = useState<{version: string} | null>(null);
+
   const DAYS = [
     { id: 1, label: "Mån" },
     { id: 2, label: "Tis" },
@@ -178,6 +182,14 @@ export default function App() {
     fetchLogs();
     const interval = setInterval(fetchLogs, 5000);
     return () => clearInterval(interval);
+  }, []);
+
+  // Listen for update events from electron main process
+  useEffect(() => {
+    const el = (window as any).electron;
+    if (!el) return;
+    el.onUpdateAvailable?.((info: {version: string}) => setUpdateAvailable(info));
+    el.onUpdateDownloaded?.((info: {version: string}) => setUpdateDownloaded(info));
   }, []);
 
   useEffect(() => {
@@ -539,7 +551,41 @@ export default function App() {
 
   return (
     <div className={`min-h-screen ${THEME.bg} text-white font-mono selection:bg-[#00FF9D] selection:text-black`}>
-      {/* Header */}
+
+      {/* Update downloaded banner */}
+      {updateDownloaded && (
+        <div className="fixed top-0 left-0 right-0 z-[200] flex items-center justify-between gap-4 px-6 py-3 bg-[#00FF9D] text-black font-bold text-sm shadow-2xl">
+          <span>🚀 Version {updateDownloaded.version} är nedladdad och redo att installeras!</span>
+          <div className="flex gap-3">
+            <button
+              onClick={() => (window as any).electron?.restartAndInstall()}
+              className="px-4 py-1.5 rounded-lg bg-black text-[#00FF9D] font-black text-xs hover:bg-gray-900 transition-all"
+            >
+              STARTA OM &amp; UPPDATERA
+            </button>
+            <button
+              onClick={() => setUpdateDownloaded(null)}
+              className="px-4 py-1.5 rounded-lg bg-black/20 text-black font-bold text-xs hover:bg-black/30 transition-all"
+            >
+              SENARE
+            </button>
+          </div>
+        </div>
+      )}
+
+      {/* Update available banner (downloading) */}
+      {updateAvailable && !updateDownloaded && (
+        <div className="fixed top-0 left-0 right-0 z-[200] flex items-center justify-between gap-4 px-6 py-3 bg-blue-600 text-white font-bold text-sm shadow-2xl">
+          <span>⬇️ Version {updateAvailable.version} laddas ner i bakgrunden...</span>
+          <button
+            onClick={() => setUpdateAvailable(null)}
+            className="px-4 py-1.5 rounded-lg bg-white/20 text-white text-xs hover:bg-white/30 transition-all"
+          >
+            OK
+          </button>
+        </div>
+      )}
+
       <header className={`h-16 border-b ${THEME.border} flex items-center justify-between px-6 sticky top-0 z-50 ${THEME.bg}`}>
         <div className="flex items-center gap-3">
           <img
