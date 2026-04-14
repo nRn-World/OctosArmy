@@ -11,6 +11,6 @@ Currently, the following versions of OctosArmy are supported with security updat
 
 ## Reporting a Vulnerability
 
-If you find a security vulnerability, please do NOT open a public issue. Instead, send an email to security@nrnworld.com.
+If you find a security vulnerability, please do NOT open a public issue. Instead, send an email to nrnworld@gmail.com
 
 We will acknowledge your report within 48 hours and provide a timeline for a fix. Please keep information confidential until a patch is released.
