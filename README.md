@@ -50,6 +50,38 @@ Ladda ner den senaste versionen från [Releases](../../releases) och kör `Octos
 
 ---
 
+## 👩‍💻 För Utvecklare (Development Setup)
+
+Vill du hjälpa till att utveckla OctosArmy? Så här kommer du igång med din egen utvecklingsmiljö:
+
+### 1. Klona repositoryt
+```bash
+git clone https://github.com/nRn-World/octosarmy.git
+cd octosarmy
+```
+
+### 2. Installera beroenden
+```bash
+npm install
+```
+
+### 3. Starta utvecklingsläge
+Du behöver köra två kommandon (helst i separata terminalfönster):
+
+**Terminal 1 (Backend/Server):**
+Kör server-logiken som hanterar agenter via Ollama.
+```bash
+npm run dev
+```
+
+**Terminal 2 (Frontend & Electron UI):**
+Bygger gränssnittet och startar Electron-appen.
+```bash
+npm run dev:electron
+```
+
+---
+
 ## 🛠 Teknikstack
 *   **Frontend:** React, Tailwind CSS, Framer Motion
 *   **Backend:** Node.js (Express), Electron
