@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Tray, Menu } from 'electron';
 import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import log from 'electron-log';
@@ -64,6 +64,8 @@ const primaryRoot = activeWorkspaceRoots[0] || path.join(appDataDir, 'workspace'
 if (!fs.existsSync(primaryRoot)) fs.mkdirSync(primaryRoot, { recursive: true });
 
 let mainWindow;
+let tray = null;
+let isQuitting = false;
 
 // --- IPC HANDLERS ---
 
@@ -131,17 +133,28 @@ function createWindow() {
 
   log.info('Preload: ' + preloadPath);
 
+  const iconPath = path.join(__dirname, 'Logo', 'OSAI-no-bg.ico');
+
   mainWindow = new BrowserWindow({
     width: 1300,
     height: 900,
     backgroundColor: '#0A0A0B',
     title: 'OctosArmy - Multi-Agent Control System',
+    icon: iconPath,
     webPreferences: {
       nodeIntegration: false,
       contextIsolation: true,
       preload: preloadPath,
       webSecurity: false,
     },
+  });
+
+  mainWindow.on('close', (event) => {
+    if (!isQuitting) {
+      event.preventDefault();
+      mainWindow.hide();
+      return false;
+    }
   });
 
   const distPath = isPackaged
@@ -163,5 +176,40 @@ function createWindow() {
   });
 }
 
-app.whenReady().then(createWindow);
-app.on('window-all-closed', () => app.quit());
+app.whenReady().then(() => {
+  createWindow();
+
+  const iconPath = path.join(__dirname, 'Logo', 'OSAI-no-bg.ico');
+  tray = new Tray(iconPath);
+
+  const contextMenu = Menu.buildFromTemplate([
+    { label: 'Visa OctosArmy', click: () => {
+        if (mainWindow) {
+          mainWindow.show();
+          mainWindow.focus();
+        }
+      }
+    },
+    { label: 'Avsluta', click: () => {
+        isQuitting = true;
+        app.quit();
+      }
+    }
+  ]);
+
+  tray.setToolTip('OctosArmy - Körs i bakgrunden');
+  tray.setContextMenu(contextMenu);
+
+  tray.on('double-click', () => {
+    if (mainWindow) {
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+});
+
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    // Gör ingenting istället för att stänga av appen, låt tray vara kvar.
+  }
+});
