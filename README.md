@@ -72,5 +72,5 @@ Din integritet är vår prioritet. Eftersom OctosArmy körs lokalt skickas ingen
 
 <p align="center">
   <i>Utvecklat med kärlek av nRn World</i><br>
-  <b>v1.1.21-STABLE</b>
+  <b>v1.1.22-STABLE</b>
 </p>
