@@ -52,11 +52,16 @@ const rootsFile = path.join(configDir, 'roots.json');
 let activeWorkspaceRoots = [path.join(appDataDir, 'workspace')];
 if (fs.existsSync(rootsFile)) {
   try {
-    activeWorkspaceRoots = JSON.parse(fs.readFileSync(rootsFile, 'utf-8'));
+    const saved = JSON.parse(fs.readFileSync(rootsFile, 'utf-8'));
+    if (Array.isArray(saved) && saved.length > 0 && saved[0]) {
+      activeWorkspaceRoots = saved;
+    }
   } catch(e) { log.error('Kunde inte ladda roots.json'); }
 }
 
-if (!fs.existsSync(activeWorkspaceRoots[0])) fs.mkdirSync(activeWorkspaceRoots[0], { recursive: true });
+// Skapa mappen om den inte finns (och se till att vi faktiskt har en path)
+const primaryRoot = activeWorkspaceRoots[0] || path.join(appDataDir, 'workspace');
+if (!fs.existsSync(primaryRoot)) fs.mkdirSync(primaryRoot, { recursive: true });
 
 let mainWindow;
 
