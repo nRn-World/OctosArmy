@@ -1057,7 +1057,7 @@ export default function App() {
                   </button>
                 )}
               </div>
-              <span className={`text-[9px] ${THEME.muted}`}>v1.1.22-STABLE</span>
+              <span className={`text-[9px] ${THEME.muted}`}>v{import.meta.env.VITE_APP_VERSION}-STABLE</span>
             </div>
           </section>
         </div>
