@@ -3,7 +3,7 @@
   "author": "nRn World",
   "description": "Multi-Agent Control System för AI-driven filhantering",
   "private": false,
-  "version": "1.1.29",
+  "version": "1.1.30",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
@@ -34,13 +34,12 @@
       "createDesktopShortcut": true,
       "createStartMenuShortcut": true
     },
-    "publish": [
-      {
-        "provider": "github",
-        "owner": "nRn-World",
-        "repo": "octosarmy"
-      }
-    ],
+    "publish": {
+      "provider": "github",
+      "owner": "nRn-World",
+      "repo": "OctosArmy",
+      "releaseType": "release"
+    },
     "files": [
       "dist/**/*",
       "electron-main.js",
