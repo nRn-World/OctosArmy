@@ -232,7 +232,8 @@ function validateEnvelope(obj: Record<string, unknown>): void {
 async function ollamaChat(
   baseUrl: string,
   model: string,
-  messages: { role: string; content: string }[]
+  messages: { role: string; content: string }[],
+  signal?: AbortSignal
 ): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, "")}/api/chat`;
   const resp = await fetch(url, {
@@ -245,6 +246,7 @@ async function ollamaChat(
       format: "json",
       options: { temperature: 0.1 },
     }),
+    signal,
   });
   if (!resp.ok) {
     const t = await resp.text();
@@ -303,6 +305,7 @@ export type RunOllamaOptions = {
   terminalTimeoutSec: number;
   maxTerminalOutputChars: number;
   onLog: (log: AgentLog) => void;
+  abortSignal?: AbortSignal;
 };
 
 export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string> {
@@ -315,10 +318,17 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     terminalTimeoutSec,
     maxTerminalOutputChars,
     onLog,
+    abortSignal,
   } = opts;
 
   const log = (msg: string, type: AgentLog["type"] = "info", agentId: string = "System") => {
     onLog({ timestamp: new Date().toISOString(), agent: agentId, message: msg, type });
+  };
+  
+  const ensureNotAborted = () => {
+    if (abortSignal?.aborted) {
+      throw new DOMException("Aborted", "AbortError");
+    }
   };
 
   const agentSequence = ["scout", "brainstormer", "coder", "reviewer", "auditor", "security"];
@@ -342,18 +352,23 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
   let lastSummary = "Mission incomplete.";
 
   for (let step = 0; step < maxSteps; step++) {
+    ensureNotAborted();
     const currentAgentId = agentSequence[currentAgentIndex];
     const currentAgentName = currentAgentId.charAt(0).toUpperCase() + currentAgentId.slice(1);
     
     log(`Step ${step + 1}: calling Ollama (${currentAgentName})...`, "info", currentAgentId);
     let raw: string;
     try {
-      raw = await ollamaChat(ollamaBaseUrl, ollamaModel, messages);
+      raw = await ollamaChat(ollamaBaseUrl, ollamaModel, messages, abortSignal);
     } catch (e: any) {
+      if (e?.name === "AbortError" || abortSignal?.aborted) {
+        throw e;
+      }
       log(`Ollama error: ${e.message}`, "error", currentAgentId);
       throw e;
     }
     messages.push({ role: "assistant", content: raw });
+    ensureNotAborted();
 
     let obj: Record<string, unknown>;
     try {
@@ -421,6 +436,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "read_file") {
+      ensureNotAborted();
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
@@ -448,6 +464,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "list_dir") {
+      ensureNotAborted();
       const rel = String(obj.path ?? ".");
       try {
         const listing = listFilesNonRecursive(sandboxRoots, rel);
@@ -471,6 +488,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "search_files") {
+      ensureNotAborted();
       const q = String(obj.query);
       try {
         const results = searchFilesRecursive(sandboxRoots, q);
@@ -495,12 +513,14 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "empty_dir") {
+      ensureNotAborted();
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
         if (!fs.existsSync(safe)) throw new Error("Path does not exist");
         const entries = fs.readdirSync(safe);
         for (const entry of entries) {
+          ensureNotAborted();
           fs.rmSync(path.join(safe, entry), { recursive: true, force: true });
         }
         messages.push({
@@ -519,6 +539,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "delete_path") {
+      ensureNotAborted();
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
@@ -552,6 +573,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
 
 
     if (intent === "create_dir") {
+      ensureNotAborted();
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
@@ -575,6 +597,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "move_path") {
+      ensureNotAborted();
       const srcRel = String(obj.source).trim();
       let dstRel = String(obj.destination).trim();
       
@@ -626,6 +649,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "copy_path") {
+      ensureNotAborted();
       const srcRel = String(obj.source).trim();
       let dstRel = String(obj.destination).trim();
       
@@ -673,6 +697,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "bulk_copy") {
+      ensureNotAborted();
       const exts = (obj.extensions as string[] || []).map(e => e.toLowerCase());
       const dstRel = String(obj.destination_dir || obj.destination);
       const srcDirRel = String(obj.source_dir || obj.source || ".");
@@ -688,6 +713,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
         const copyAll = exts.includes("*");
         
         for (const f of files) {
+          ensureNotAborted();
           const src = path.join(safeSrcDir, f.name);
           const dst = path.join(safeDst, f.name);
           if (src === dst) continue;
@@ -719,6 +745,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "bulk_move") {
+      ensureNotAborted();
       const exts = (obj.extensions as string[] || []).map(e => e.toLowerCase());
       const dstRel = String(obj.destination_dir || obj.destination);
       const srcDirRel = String(obj.source_dir || obj.source || ".");
@@ -734,6 +761,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
         const moveAll = exts.includes("*");
         
         for (const f of files) {
+          ensureNotAborted();
           const src = path.join(safeSrcDir, f.name);
           const dst = path.join(safeDst, f.name);
           if (src === dst) continue;
@@ -767,6 +795,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
 
     if (intent === "run_terminal") {
+      ensureNotAborted();
       const argv = obj.argv as string[];
       const cwdRel = String(obj.cwd || ".");
       try {

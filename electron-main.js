@@ -45,6 +45,17 @@ if (!process.env.OLLAMA_MODEL) process.env.OLLAMA_MODEL = 'gemma4:e4b';
 const appDataDir = path.join(os.homedir(), 'AppData', 'Roaming', 'OctosArmy');
 if (!fs.existsSync(appDataDir)) fs.mkdirSync(appDataDir, { recursive: true });
 
+try {
+  const baseDir = isPackaged ? appDataDir : path.join(os.tmpdir(), 'OctosArmy-dev');
+  if (!fs.existsSync(baseDir)) fs.mkdirSync(baseDir, { recursive: true });
+  const cacheDir = path.join(baseDir, 'cache');
+  if (!fs.existsSync(cacheDir)) fs.mkdirSync(cacheDir, { recursive: true });
+  app.setPath('userData', baseDir);
+  app.setPath('cache', cacheDir);
+  app.commandLine.appendSwitch('disk-cache-dir', cacheDir);
+  app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
+} catch (e) {}
+
 const configDir = path.join(appDataDir, 'config');
 if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 const rootsFile = path.join(configDir, 'roots.json');
@@ -66,6 +77,19 @@ if (!fs.existsSync(primaryRoot)) fs.mkdirSync(primaryRoot, { recursive: true });
 let mainWindow;
 let tray = null;
 let isQuitting = false;
+
+const gotTheLock = app.requestSingleInstanceLock();
+if (!gotTheLock) {
+  app.quit();
+} else {
+  app.on('second-instance', () => {
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) mainWindow.restore();
+      mainWindow.show();
+      mainWindow.focus();
+    }
+  });
+}
 
 // --- IPC HANDLERS ---
 
@@ -112,12 +136,11 @@ ipcMain.handle('get-workspace', () => {
 async function startBackend() {
   try {
     const serverPath = isPackaged
-      ? path.join(process.resourcesPath, 'server.js')
-      : path.join(__dirname, 'dist', 'server.js');
+      ? path.join(process.resourcesPath, 'server.cjs')
+      : path.join(__dirname, 'dist', 'server.cjs');
 
     log.info('Startar backend-server: ' + serverPath);
     
-    // Server is bundled as CJS, so we need require() not import()
     const { createRequire } = await import('module');
     const require = createRequire(import.meta.url);
     require(serverPath);
@@ -125,6 +148,10 @@ async function startBackend() {
     log.info('Backend-server startad på port 3000');
     return true;
   } catch (err) {
+    if (String(err?.message || err).includes('EADDRINUSE')) {
+      log.warn('Backend-port 3000 är redan upptagen. Antar att backend redan körs och fortsätter.');
+      return true;
+    }
     log.error('SERVERFEL: ' + err.message);
     log.error(err.stack);
     return false;
@@ -175,7 +202,7 @@ function createWindow() {
     } else {
       log.warn('Server MISSLYCKADES – laddar UI ändå (IPC fungerar fortfarande)');
     }
-    mainWindow.loadFile(indexPath).catch(err => {
+    mainWindow.loadURL(pathToFileURL(indexPath).href).catch(err => {
       log.error('LADDNINGSFEL: ' + err.message);
     });
   });

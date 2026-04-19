@@ -19,7 +19,6 @@ import {
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
 import {
-  runAgentPipeline,
   runOllamaServerPipeline,
   useOllamaEngine,
   AgentLog,
@@ -70,9 +69,8 @@ export default function App() {
   
   // Confirmation states
   const [showConfirm1, setShowConfirm1] = useState(false);
-  const [showConfirm2, setShowConfirm2] = useState(false);
   const [timer1, setTimer1] = useState(0);
-  const [timer2, setTimer2] = useState(0);
+  const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [isAddingRoot, setIsAddingRoot] = useState(false);
 
   // Update states
@@ -116,13 +114,18 @@ export default function App() {
           return `${h.padStart(2, "0")}:${m.padStart(2, "0")}`;
         });
         setSelectedTimes(times);
+      } else {
+        setSelectedTimes(["08:00"]);
       }
       
       if (dow !== "*") setSelectedDays(dow.split(",").map(Number));
+      else setSelectedDays([]);
       if (mon !== "*") setSelectedMonths(mon.split(",").map(Number));
+      else setSelectedMonths([]);
       if (dom !== "*") setSelectedDom(dom.split(",").map(Number));
+      else setSelectedDom([]);
     }
-  }, []);
+  }, [schedule]);
 
   const generateCron = (times: string[], days: number[], months: number[], doms: number[]) => {
     const hours = Array.from(new Set(times.map(t => parseInt(t.split(":")[0]).toString()))).sort((a,b) => parseInt(a)-parseInt(b)).join(",");
@@ -176,10 +179,21 @@ export default function App() {
   };
   const logEndRef = useRef<HTMLDivElement>(null);
   const consoleContainerRef = useRef<HTMLDivElement>(null);
+  const runAbortRef = useRef<AbortController | null>(null);
+  const emergencyStopRef = useRef(false);
+  const lastWarningRef = useRef<{ key: string; at: number } | null>(null);
 
   useEffect(() => {
     fetchWorkspace();
     fetchLogs();
+    (async () => {
+      try {
+        const res = await fetch(apiUrl("/api/schedule"));
+        const data = await res.json();
+        if (data?.cronExpr) setSchedule(String(data.cronExpr));
+        if (!mission.trim() && data?.mission) setMission(String(data.mission));
+      } catch (e) {}
+    })();
     const interval = setInterval(fetchLogs, 5000);
     return () => clearInterval(interval);
   }, []);
@@ -206,14 +220,6 @@ export default function App() {
     }
     return () => clearInterval(interval);
   }, [showConfirm1, timer1]);
-
-  useEffect(() => {
-    let interval: any;
-    if (showConfirm2 && timer2 > 0) {
-      interval = setInterval(() => setTimer2(prev => prev - 1), 1000);
-    }
-    return () => clearInterval(interval);
-  }, [showConfirm2, timer2]);
 
   const handleConsoleScroll = () => {
     if (!consoleContainerRef.current) return;
@@ -390,6 +396,16 @@ export default function App() {
   };
 
   const addLog = async (log: AgentLog) => {
+    // Prevent accidental duplicate warning spam from fast concurrent stop/abort paths.
+    if (log.type === "warning") {
+      const key = `${log.agent}|${log.message}`;
+      const now = Date.now();
+      if (lastWarningRef.current && lastWarningRef.current.key === key && now - lastWarningRef.current.at < 1500) {
+        return;
+      }
+      lastWarningRef.current = { key, at: now };
+    }
+
     // Always update local UI immediately
     setLogs(prev => [...prev.slice(-499), log]);
     // Try to sync to server (best-effort)
@@ -405,65 +421,59 @@ export default function App() {
   };
 
   const testAIConnection = async () => {
-    if (useOllamaEngine()) {
-      addLog({
-        timestamp: new Date().toISOString(),
-        agent: "System",
-        message: "Testing connection to Ollama...",
-        type: "info",
-      });
-      try {
-        const res = await fetch(apiUrl("/api/ollama/health"));
-        const data = await res.json();
-        if (!res.ok || !data.ok) {
-          throw new Error(data.error || res.statusText);
-        }
-        addLog({
-          timestamp: new Date().toISOString(),
-          agent: "System",
-          message: `Ollama är nåbar på ${data.base || "localhost"}.`,
-          type: "success",
-        });
-      } catch (err: any) {
-        addLog({
-          timestamp: new Date().toISOString(),
-          agent: "System",
-          message: `Ollama-kontroll misslyckades: ${err.message}. Körs Ollama?`,
-          type: "error",
-        });
-      }
-      return;
-    }
-
+    if (!useOllamaEngine()) return;
     addLog({
       timestamp: new Date().toISOString(),
       agent: "System",
-      message: "Testing Gemini API key (Vite env)...",
+      message: "Testing connection to Ollama...",
       type: "info",
     });
-
-    const apiKey = process.env.GEMINI_API_KEY;
-    if (!apiKey || String(apiKey).trim() === "") {
+    try {
+      const res = await fetch(apiUrl("/api/ollama/health"));
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || res.statusText);
+      }
+      if (data.modelAvailable === false) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          agent: "System",
+          message: `Ollama är nåbar på ${data.base || "localhost"}, men modellen "${data.model}" saknas. Kör: ollama pull ${data.model}`,
+          type: "warning",
+        });
+        return;
+      }
+      if (data.modelAvailable === null) {
+        addLog({
+          timestamp: new Date().toISOString(),
+          agent: "System",
+          message: `Ollama är nåbar på ${data.base || "localhost"}. Kunde inte verifiera att modellen finns, men du kan prova att köra pipelinen.`,
+          type: "warning",
+        });
+        return;
+      }
       addLog({
         timestamp: new Date().toISOString(),
         agent: "System",
-        message: "Ingen Gemini API-nyckel — pipelinen använder Ollama när du kör den.",
-        type: "warning",
+        message: `Ollama är nåbar på ${data.base || "localhost"}.`,
+        type: "success",
       });
-      return;
+    } catch (err: any) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Ollama-kontroll misslyckades: ${err.message}. Körs Ollama?`,
+        type: "error",
+      });
     }
-
-    addLog({
-      timestamp: new Date().toISOString(),
-      agent: "System",
-      message: "Gemini key present. Run pipeline to use Gemini multi-agent flow.",
-      type: "success",
-    });
   };
 
   const executePipeline = async () => {
     if (isRunning) return;
+    emergencyStopRef.current = false;
     setIsRunning(true);
+    const abortController = new AbortController();
+    runAbortRef.current = abortController;
     addLog({
       timestamp: new Date().toISOString(),
       agent: "System",
@@ -471,58 +481,62 @@ export default function App() {
       type: "info",
     });
 
-    addLog({
-      timestamp: new Date().toISOString(),
-      agent: "System",
-      message: "Manual pipeline execution started.",
-      type: "info",
-    });
+    try {
+      const instrLines = Object.entries(agentInstructions)
+        .map(([id, v]) => ({ id, v: String(v || "").trim() }))
+        .filter(x => x.v.length > 0)
+        .map(x => `- ${x.id}: ${x.v}`);
 
-    if (useOllamaEngine()) {
-      try {
-        await runOllamaServerPipeline(addLog, mission);
-      } catch (e: any) {
-        addLog({
-          timestamp: new Date().toISOString(),
-          agent: "System",
-          message: e.message || String(e),
-          type: "error",
-        });
+      const finalMission = instrLines.length
+        ? `${mission}\n\nAGENT INSTRUCTIONS:\n${instrLines.join("\n")}`
+        : mission;
+
+      await runOllamaServerPipeline(addLog, finalMission, abortController.signal);
+    } catch (e: any) {
+      if (e?.name === "AbortError") {
+        if (!emergencyStopRef.current) {
+          addLog({
+            timestamp: new Date().toISOString(),
+            agent: "System",
+            message: "Körningen avbröts.",
+            type: "warning",
+          });
+        }
+        return;
       }
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: e.message || String(e),
+        type: "error",
+      });
+    } finally {
+      runAbortRef.current = null;
+      emergencyStopRef.current = false;
       setIsRunning(false);
-      return;
     }
+  };
 
-    const agentNames = agents.reduce((acc, agent) => ({ ...acc, [agent.id]: agent.name }), {});
-
-    await runAgentPipeline(
-      workspaceFiles.flatMap(w => w.files),
-      addLog,
-      async (path) => {
-        const res = await fetch(
-          apiUrl(`/api/files/read?filePath=${encodeURIComponent(path)}`)
-        );
-        const data = await res.json();
-        return data.content;
-      },
-      async (path, content) => {
-        await fetch(apiUrl("/api/files/write"), {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ filePath: path, content }),
-        });
-        fetchWorkspace();
-      },
-      mission,
-      agentInstructions,
-      agentNames
-    );
-
+  const emergencyStop = async () => {
+    emergencyStopRef.current = true;
+    addLog({
+      timestamp: new Date().toISOString(),
+      agent: "System",
+      message: "NÖDSTOPP aktiverad. Stoppar all aktivitet omedelbart.",
+      type: "warning",
+    });
+    try {
+      runAbortRef.current?.abort();
+    } catch (e) {}
+    try {
+      await fetch(apiUrl("/api/agents/abort"), { method: "POST" });
+    } catch (e) {}
     setIsRunning(false);
   };
 
   const handleRunPipeline = () => {
     setTimer1(15);
+    setConfirmAcknowledged(false);
     setShowConfirm1(true);
   };
 
@@ -539,7 +553,7 @@ export default function App() {
     await fetch(apiUrl("/api/schedule"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cronExpr: schedule })
+      body: JSON.stringify({ cronExpr: schedule, mission })
     });
     addLog({
       timestamp: new Date().toISOString(),
@@ -548,6 +562,9 @@ export default function App() {
       type: "success"
     });
   };
+
+  const confirmWarmup = showConfirm1 && timer1 > 10;
+  const confirmDanger = showConfirm1 && timer1 <= 10;
 
   return (
     <div className={`min-h-screen ${THEME.bg} text-white font-mono selection:bg-[#00FF9D] selection:text-black`}>
@@ -604,6 +621,14 @@ export default function App() {
             <Shield className="w-4 h-4 text-green-500" />
             <span className="text-xs font-medium text-green-500">SANDLÅDA AKTIV</span>
           </div>
+          {isRunning && (
+            <button
+              onClick={emergencyStop}
+              className="flex items-center gap-2 px-4 py-2 rounded-lg font-black transition-all bg-red-600 text-white hover:bg-red-500 active:scale-95"
+            >
+              NÖDSTOPP
+            </button>
+          )}
           <button 
             onClick={handleRunPipeline}
             disabled={isRunning}
@@ -1052,7 +1077,7 @@ export default function App() {
             >
               <div className="space-y-1">
                 {logs
-                  .filter(log => !selectedAgentFilter || log.agent === selectedAgentFilter || log.agent === "System")
+                  .filter(log => !selectedAgentFilter || log.agent === selectedAgentFilter)
                   .map((log, i) => (
                     <motion.div 
                       key={i}
@@ -1118,95 +1143,79 @@ export default function App() {
             exit={{ opacity: 0, y: 50, scale: 0.9 }}
             className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[100] w-full max-w-lg px-6"
           >
-            <div className={`bg-[#1A1A1E]/90 backdrop-blur-xl border-2 border-yellow-500/50 rounded-2xl p-6 shadow-[0_20px_50px_rgba(0,0,0,0.5),0_0_30px_rgba(234,179,8,0.2)]`}>
+            <div
+              className={`bg-[#1A1A1E]/90 backdrop-blur-xl border-2 rounded-2xl p-6 shadow-[0_20px_50px_rgba(0,0,0,0.5)] transition-all ${
+                confirmWarmup
+                  ? "border-yellow-500/60 shadow-[0_20px_50px_rgba(0,0,0,0.5),0_0_30px_rgba(234,179,8,0.25)]"
+                  : confirmDanger
+                    ? "border-red-500/70 shadow-[0_20px_50px_rgba(0,0,0,0.5),0_0_40px_rgba(239,68,68,0.35)]"
+                    : "border-yellow-500/50 shadow-[0_20px_50px_rgba(0,0,0,0.5),0_0_30px_rgba(234,179,8,0.2)]"
+              }`}
+            >
               <div className="flex items-start gap-5">
-                <div className="w-12 h-12 rounded-xl bg-yellow-500/10 flex items-center justify-center border border-yellow-500/20 shrink-0">
-                  <AlertCircle className="w-6 h-6 text-yellow-500" />
+                <div
+                  className={`w-12 h-12 rounded-xl flex items-center justify-center border shrink-0 transition-all ${
+                    confirmWarmup
+                      ? "bg-yellow-500/10 border-yellow-500/25"
+                      : confirmDanger
+                        ? "bg-red-500/10 border-red-500/25 animate-pulse"
+                        : "bg-yellow-500/10 border-yellow-500/20"
+                  }`}
+                >
+                  <AlertCircle className={`w-6 h-6 ${confirmDanger ? "text-red-400" : "text-yellow-500"}`} />
                 </div>
                 <div className="flex-1 space-y-4">
                   <div>
                     <h2 className="text-lg font-bold text-white">Är du säker på att du vill göra denna ändring nu?!</h2>
                     <p className={`text-xs ${THEME.muted} mt-1`}>Kika runt i appen och verifiera allt. Klockan tickar...</p>
                   </div>
-                  
-                  <div className="flex gap-3">
-                    <button 
-                      onClick={() => {
-                        setShowConfirm1(false);
-                        setTimer1(0);
-                      }}
-                      className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-bold transition-all"
-                    >
-                      CANCEL
-                    </button>
-                    <button 
-                      disabled={timer1 > 0}
-                      onClick={() => {
-                        setShowConfirm1(false);
-                        setTimer1(0);
-                        setTimer2(15);
-                        setShowConfirm2(true);
-                      }}
-                      className={`flex-1 px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                        timer1 > 0 
-                        ? "bg-gray-800 text-gray-500 cursor-not-allowed" 
-                        : "bg-yellow-500 text-black hover:shadow-[0_0_20px_rgba(234,179,8,0.4)]"
-                      }`}
-                    >
-                      YES {timer1 > 0 && `(${timer1}s)`}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
-      {/* Confirmation HUD 2 */}
-      <AnimatePresence>
-        {showConfirm2 && (
-          <motion.div 
-            initial={{ opacity: 0, y: 50, scale: 0.9 }} 
-            animate={{ opacity: 1, y: 0, scale: 1 }} 
-            exit={{ opacity: 0, y: 50, scale: 0.9 }}
-            className="fixed bottom-10 left-1/2 -translate-x-1/2 z-[101] w-full max-w-lg px-6"
-          >
-            <div className={`bg-[#1A1A1E]/95 backdrop-blur-2xl border-2 border-red-500/50 rounded-2xl p-6 shadow-[0_20px_50px_rgba(0,0,0,0.6),0_0_40px_rgba(239,68,68,0.3)]`}>
-              <div className="flex items-start gap-5">
-                <div className="w-12 h-12 rounded-xl bg-red-500/10 flex items-center justify-center border border-red-500/20 shrink-0">
-                  <Shield className="w-6 h-6 text-red-500 animate-pulse" />
-                </div>
-                <div className="flex-1 space-y-4">
-                  <div>
-                    <h2 className="text-lg font-bold text-white italic">Har du kontrollerat att du valt rätt mapp, och att ändringarna träder i kraft nu?!</h2>
-                    <p className={`text-[10px] text-red-400 font-bold uppercase tracking-wider mt-1`}>SISTA VARNINGEN — VERIFIERA EN GÅNG TILL</p>
+                  <div className="rounded-xl border border-white/10 bg-black/30 px-4 py-3">
+                    <p className="text-[11px] text-gray-200 leading-relaxed">
+                      Viktig information: Genom att fortsätta bekräftar du att alla åtgärder utförs på eget ansvar.
+                      OctosArmy tillhandahålls i befintligt skick och tar inget ansvar för filer som redigeras, flyttas
+                      eller raderas, eller för eventuell dataförlust. Säkerhetskopiera vid behov och kontrollera att du
+                      har valt rätt mappar/behörigheter innan du godkänner.
+                    </p>
+                    <label className="mt-3 flex items-start gap-3 text-[11px] text-gray-200 select-none">
+                      <input
+                        type="checkbox"
+                        checked={confirmAcknowledged}
+                        onChange={(e) => setConfirmAcknowledged(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border border-white/20 bg-black/40"
+                      />
+                      <span>Jag har läst och accepterar villkoren ovan.</span>
+                    </label>
                   </div>
                   
                   <div className="flex gap-3">
                     <button 
                       onClick={() => {
-                        setShowConfirm2(false);
-                        setTimer2(0);
+                        setShowConfirm1(false);
+                        setTimer1(0);
+                        setConfirmAcknowledged(false);
                       }}
                       className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-bold transition-all"
                     >
                       CANCEL
                     </button>
                     <button 
-                      disabled={timer2 > 0}
+                      disabled={timer1 > 0 || !confirmAcknowledged}
                       onClick={() => {
-                        setShowConfirm2(false);
-                        setTimer2(0);
+                        setShowConfirm1(false);
+                        setTimer1(0);
+                        setConfirmAcknowledged(false);
                         executePipeline();
                       }}
                       className={`flex-1 px-4 py-2.5 rounded-lg text-xs font-bold transition-all flex items-center justify-center gap-2 ${
-                        timer2 > 0 
-                        ? "bg-gray-800 text-gray-500 cursor-not-allowed" 
-                        : "bg-red-600 text-white hover:shadow-[0_0_30px_rgba(239,68,68,0.5)] animate-pulse"
+                        timer1 > 0 || !confirmAcknowledged
+                          ? confirmWarmup
+                            ? "bg-yellow-500/15 text-yellow-200 border border-yellow-500/30 shadow-[0_0_18px_rgba(234,179,8,0.25)] cursor-not-allowed"
+                            : "bg-red-600/20 text-red-200 border border-red-500/35 shadow-[0_0_24px_rgba(239,68,68,0.35)] cursor-not-allowed animate-pulse"
+                          : "bg-red-600 text-white hover:shadow-[0_0_30px_rgba(239,68,68,0.5)] animate-pulse"
                       }`}
                     >
-                      CONFIRM {timer2 > 0 && `(${timer2}s)`}
+                      GODKÄNN {timer1 > 0 && `(${timer1}s)`}
                     </button>
                   </div>
                 </div>
