@@ -44,11 +44,11 @@ Ladda ner och installera **Ollama** från [ollama.com](https://ollama.com).
 ### 2. Ladda ner Gemma 4
 Öppna din terminal (PowerShell eller CMD) och kör följande kommando för att ladda ner agenternas språkmodell:
 ```bash
-ollama run gemma4:e4b
+ollama pull gemma4:e4b
 ```
 
 ### 3. Installera OctosArmy
-Ladda ner den senaste versionen från [Releases](../../releases) och kör `OctosArmy Setup.exe`.
+Ladda ner den senaste versionen från [Releases](../../releases) och kör `OctosArmy-Setup-<version>.exe`.
 
 ---
 
@@ -58,8 +58,8 @@ Vill du hjälpa till att utveckla OctosArmy? Så här kommer du igång med din e
 
 ### 1. Klona repositoryt
 ```bash
-git clone https://github.com/nRn-World/octosarmy.git
-cd octosarmy
+git clone https://github.com/nRn-World/OctosArmy.git
+cd OctosArmy
 ```
 
 ### 2. Installera beroenden
@@ -68,18 +68,14 @@ npm install
 ```
 
 ### 3. Starta utvecklingsläge
-Du behöver köra två kommandon (helst i separata terminalfönster):
-
-**Terminal 1 (Backend/Server):**
-Kör server-logiken som hanterar agenter via Ollama.
-```bash
-npm run dev
-```
-
-**Terminal 2 (Frontend & Electron UI):**
-Bygger gränssnittet och startar Electron-appen.
+Bygger gränssnittet, startar Electron och backend (inkl. API:et på port 3000).
 ```bash
 npm run dev:electron
+```
+
+Om du bara vill köra backend utan Electron (t.ex. för API-test):
+```bash
+npm run dev
 ```
 
 ---
