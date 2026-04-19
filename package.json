@@ -3,15 +3,16 @@
   "author": "nRn World",
   "description": "Multi-Agent Control System för AI-driven filhantering",
   "private": false,
-  "version": "1.1.31",
+  "version": "1.1.32",
   "type": "module",
   "main": "electron-main.js",
   "scripts": {
     "dev": "tsx server.ts",
-    "dev:electron": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.js && electron .",
-    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --external:vite --external:electron --outfile=dist/server.js",
+    "dev:electron": "vite build && esbuild server.ts --bundle --platform=node --format=cjs --packages=external --outfile=dist/server.cjs && electron .",
+    "build:server": "esbuild server.ts --bundle --platform=node --format=cjs --external:vite --external:electron --outfile=dist/server.cjs",
     "dist": "vite build && npm run build:server && electron-builder --win",
-    "clean": "rm -rf dist release"
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "clean": "node -e \"require('fs').rmSync('dist',{recursive:true,force:true});require('fs').rmSync('release',{recursive:true,force:true});\""
   },
   "build": {
     "appId": "com.nRnWorld.octosarmy",
@@ -48,8 +49,8 @@
     ],
     "extraResources": [
       {
-        "from": "dist/server.js",
-        "to": "server.js"
+        "from": "dist/server.cjs",
+        "to": "server.cjs"
       },
       {
         "from": "preload.js",
@@ -60,14 +61,13 @@
         "to": "dist",
         "filter": [
           "**/*",
-          "!server.js"
+          "!server.cjs"
         ]
       },
       ".env"
     ]
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
     "@tailwindcss/vite": "^4.1.14",
     "@types/cors": "^2.8.19",
     "@types/node-cron": "^3.0.11",

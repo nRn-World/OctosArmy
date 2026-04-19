@@ -5,26 +5,32 @@ import cors from "cors";
 import { fileURLToPath } from "url";
 import dotenv from "dotenv";
 import { runOllamaAgentLoop } from "./ollamaAgent.ts";
-import { spawnSync } from "child_process";
 import os from "os";
+import cron from "node-cron";
 
 dotenv.config();
 
 // In CJS mode (bundled by esbuild), __dirname and __filename are already available.
 // We use a safe check to satisfy both tsx (Esm) and build (Cjs).
 const _dirname = typeof __dirname !== 'undefined' ? __dirname : path.dirname(fileURLToPath(import.meta.url));
-const _filename = typeof __filename !== 'undefined' ? __filename : fileURLToPath(import.meta.url);
 
 // Use AppData for persistence in packaged mode to avoid permission issues
 const appDataDir = path.join(os.homedir(), "AppData", "Roaming", "OctosArmy");
 const configDir = path.join(appDataDir, "config");
 const rootsFile = path.join(configDir, "roots.json");
+const scheduleFile = path.join(configDir, "schedule.json");
 
 if (!fs.existsSync(appDataDir)) fs.mkdirSync(appDataDir, { recursive: true });
 if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
 
 // Global state
 let activeWorkspaceRoots: string[] = [path.join(appDataDir, "workspace")];
+let scheduledCronExpr: string | null = null;
+let scheduledMission: string | null = null;
+let cronTask: ReturnType<typeof cron.schedule> | null = null;
+let scheduledRunInProgress = false;
+let currentRunAbort: AbortController | null = null;
+let currentRunInProgress = false;
 
 function loadRoots() {
   if (fs.existsSync(rootsFile)) {
@@ -45,6 +51,91 @@ function ensureDir(p: string) {
   } catch (e) {
     console.error(`Permission error creating ${p}:`, e);
   }
+}
+
+function loadSchedule() {
+  if (!fs.existsSync(scheduleFile)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(scheduleFile, "utf-8"));
+    const cronExpr = typeof raw?.cronExpr === "string" ? raw.cronExpr.trim() : "";
+    const mission = typeof raw?.mission === "string" ? raw.mission.trim() : "";
+    scheduledCronExpr = cronExpr || null;
+    scheduledMission = mission || null;
+  } catch (e) {}
+}
+
+function persistSchedule() {
+  try {
+    fs.writeFileSync(
+      scheduleFile,
+      JSON.stringify(
+        {
+          cronExpr: scheduledCronExpr,
+          mission: scheduledMission,
+        },
+        null,
+        2
+      )
+    );
+  } catch (e) {}
+}
+
+function setCronTask(expr: string | null) {
+  if (cronTask) {
+    try {
+      cronTask.stop();
+    } catch (e) {}
+    cronTask = null;
+  }
+
+  if (!expr) return;
+  if (!cron.validate(expr)) return;
+
+  cronTask = cron.schedule(expr, async () => {
+    if (currentRunInProgress) return;
+    if (scheduledRunInProgress) return;
+    if (!scheduledMission || !scheduledMission.trim()) return;
+
+    scheduledRunInProgress = true;
+    currentRunInProgress = true;
+    currentRunAbort = new AbortController();
+    try {
+      loadRoots();
+      const summary = await runOllamaAgentLoop({
+        ollamaBaseUrl: (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
+        ollamaModel: (process.env.OLLAMA_MODEL || "gemma4:e4b").trim(),
+        sandboxRoots: activeWorkspaceRoots,
+        mission: scheduledMission,
+        maxSteps: 200,
+        terminalTimeoutSec: 60,
+        maxTerminalOutputChars: 50_000,
+        abortSignal: currentRunAbort.signal,
+        onLog: (log: any) => {
+          agentLogs.push(log);
+          if (agentLogs.length > 1000) agentLogs = agentLogs.slice(-1000);
+        },
+      } as any);
+      agentLogs.push({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Scheduled run complete. Summary: ${String(summary).slice(0, 800)}`,
+        type: "success",
+      });
+      if (agentLogs.length > 1000) agentLogs = agentLogs.slice(-1000);
+    } catch (e: any) {
+      agentLogs.push({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Scheduled run failed: ${e.message || String(e)}`,
+        type: "error",
+      });
+      if (agentLogs.length > 1000) agentLogs = agentLogs.slice(-1000);
+    } finally {
+      scheduledRunInProgress = false;
+      currentRunInProgress = false;
+      currentRunAbort = null;
+    }
+  });
 }
 
 async function startServer() {
@@ -86,6 +177,10 @@ async function startServer() {
         ensureDir(resolved);
         return resolved;
       })));
+
+      try {
+        fs.writeFileSync(rootsFile, JSON.stringify(activeWorkspaceRoots, null, 2));
+      } catch (e) {}
       
       res.json({ roots: activeWorkspaceRoots });
     } catch (e: any) {
@@ -121,9 +216,18 @@ async function startServer() {
 
   app.get("/api/ollama/health", async (_req, res) => {
     const base = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
+    const model = (process.env.OLLAMA_MODEL || "gemma4:e4b").trim();
     try {
       const r = await fetch(`${base}/api/tags`);
-      res.json({ ok: r.ok, base });
+      let modelAvailable: boolean | null = null;
+      try {
+        const data = await r.clone().json();
+        const names = Array.isArray((data as any)?.models)
+          ? (data as any).models.map((m: any) => String(m?.name || "").trim()).filter(Boolean)
+          : [];
+        if (names.length) modelAvailable = names.includes(model);
+      } catch (e) {}
+      res.json({ ok: r.ok, base, model, modelAvailable });
     } catch (e: any) {
       res.status(503).json({ ok: false, error: e.message });
     }
@@ -133,14 +237,20 @@ async function startServer() {
     loadRoots(); // Sync with electron-main.js state
     const mission = req.body?.mission || req.body?.globalMission || "";
     if (!mission.trim()) return res.status(400).json({ error: "Mission missing" });
+    if (currentRunInProgress) return res.status(409).json({ ok: false, error: "A run is already in progress" });
 
     try {
+      currentRunInProgress = true;
+      currentRunAbort = new AbortController();
       const summary = await runOllamaAgentLoop({
         ollamaBaseUrl: (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
         ollamaModel: (process.env.OLLAMA_MODEL || "gemma4:e4b").trim(),
         sandboxRoots: activeWorkspaceRoots,
         mission,
         maxSteps: 200,
+        terminalTimeoutSec: 60,
+        maxTerminalOutputChars: 50_000,
+        abortSignal: currentRunAbort.signal,
         onLog: (log: any) => {
           agentLogs.push(log);
           if (agentLogs.length > 1000) agentLogs = agentLogs.slice(-1000);
@@ -148,8 +258,75 @@ async function startServer() {
       } as any);
       res.json({ ok: true, summary });
     } catch (e: any) {
-      res.status(500).json({ ok: false, error: e.message });
+      if (e?.name === "AbortError") {
+        res.status(499).json({ ok: false, error: "Aborted" });
+      } else {
+        res.status(500).json({ ok: false, error: e.message });
+      }
+    } finally {
+      currentRunInProgress = false;
+      currentRunAbort = null;
     }
+  });
+
+  app.post("/api/agents/abort", (_req, res) => {
+    if (!currentRunAbort) return res.json({ ok: false, error: "No active run" });
+    try {
+      currentRunAbort.abort();
+    } catch (e) {}
+    return res.json({ ok: true });
+  });
+
+  app.get("/api/files/read", (req, res) => {
+    try {
+      loadRoots();
+      const filePath = String(req.query?.filePath || "");
+      const abs = validatePath(filePath);
+      if (!fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+        return res.status(404).json({ error: "File not found" });
+      }
+      const content = fs.readFileSync(abs, "utf-8");
+      return res.json({ ok: true, content });
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/files/write", (req, res) => {
+    try {
+      loadRoots();
+      const filePath = String(req.body?.filePath || "");
+      const content = String(req.body?.content ?? "");
+      const abs = validatePath(filePath);
+      ensureDir(path.dirname(abs));
+      fs.writeFileSync(abs, content, "utf-8");
+      return res.json({ ok: true });
+    } catch (e: any) {
+      return res.status(400).json({ error: e.message });
+    }
+  });
+
+  app.post("/api/workspace/pick", (_req, res) => {
+    return res.status(501).json({ error: "Folder picker is only available in the Electron app." });
+  });
+
+  app.get("/api/schedule", (_req, res) => {
+    loadSchedule();
+    return res.json({ ok: true, cronExpr: scheduledCronExpr, mission: scheduledMission });
+  });
+
+  app.post("/api/schedule", (req, res) => {
+    const cronExpr = String(req.body?.cronExpr || "").trim();
+    const mission = typeof req.body?.mission === "string" ? req.body.mission.trim() : "";
+
+    if (!cronExpr) return res.status(400).json({ error: "cronExpr required" });
+    if (!cron.validate(cronExpr)) return res.status(400).json({ error: "Invalid cron expression" });
+
+    scheduledCronExpr = cronExpr;
+    scheduledMission = mission || null;
+    persistSchedule();
+    setCronTask(scheduledCronExpr);
+    return res.json({ ok: true, cronExpr: scheduledCronExpr, mission: scheduledMission });
   });
 
   // Serve static files
@@ -164,10 +341,21 @@ async function startServer() {
     }
   });
 
-  app.listen(PORT, "127.0.0.1", () => {
+  const server = app.listen(PORT, "127.0.0.1");
+  server.on("listening", () => {
     console.log(`Backend running on http://127.0.0.1:${PORT}`);
   });
+  server.on("error", (err: any) => {
+    if (err && err.code === "EADDRINUSE") {
+      console.warn(`Backend port ${PORT} already in use. Assuming another OctosArmy backend is running.`);
+      return;
+    }
+    console.error("Backend listen error:", err);
+  });
 }
+
+loadSchedule();
+setCronTask(scheduledCronExpr);
 
 startServer().catch(err => {
   console.error("Failed to start server:", err);
