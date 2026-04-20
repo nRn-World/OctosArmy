@@ -17,33 +17,43 @@ app.setAppUserModelId('com.nRnWorld.octosarmy');
 
 const isPackaged = app.isPackaged;
 
+// State management in main process
+const appDataDir = path.join(os.homedir(), 'AppData', 'Roaming', 'OctosArmy');
+if (!fs.existsSync(appDataDir)) fs.mkdirSync(appDataDir, { recursive: true });
+
 if (isPackaged) {
   process.env.NODE_ENV = 'production';
   process.env.DIST_PATH = path.join(process.resourcesPath, 'dist');
-  
-  // Load .env from resources if it exists
-  const envPath = path.join(process.resourcesPath, '.env');
+
+  const envPath = path.join(appDataDir, '.env');
   if (fs.existsSync(envPath)) {
-    const envContent = fs.readFileSync(envPath, 'utf-8');
-    envContent.split('\n').forEach(line => {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith('#')) return;
-      const [key, ...vals] = trimmed.split('=');
-      if (key && vals.length > 0) {
-        process.env[key.trim()] = vals.join('=').trim();
-      }
-    });
-    log.info('Laddade .env från: ' + envPath);
+    try {
+      const allowed = new Set([
+        'OLLAMA_BASE_URL',
+        'OLLAMA_MODEL',
+        'OCTOSARMY_MAX_STEPS',
+        'OCTOSARMY_TERMINAL_TIMEOUT',
+        'OCTOSARMY_MAX_TERMINAL_OUTPUT',
+      ]);
+      const envContent = fs.readFileSync(envPath, 'utf-8');
+      envContent.split('\n').forEach(line => {
+        const trimmed = line.trim();
+        if (!trimmed || trimmed.startsWith('#')) return;
+        const [key, ...vals] = trimmed.split('=');
+        const k = (key || '').trim();
+        if (!k || !allowed.has(k) || vals.length === 0) return;
+        process.env[k] = vals.join('=').trim();
+      });
+      log.info('Laddade lokala runtime-variabler från: ' + envPath);
+    } catch (e) {
+      log.warn('Kunde inte läsa lokal .env i AppData. Fortsätter med defaults.');
+    }
   }
 }
 
 // Fallback defaults for Ollama
 if (!process.env.OLLAMA_BASE_URL) process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
 if (!process.env.OLLAMA_MODEL) process.env.OLLAMA_MODEL = 'gemma4:e4b';
-
-// State management in main process
-const appDataDir = path.join(os.homedir(), 'AppData', 'Roaming', 'OctosArmy');
-if (!fs.existsSync(appDataDir)) fs.mkdirSync(appDataDir, { recursive: true });
 
 try {
   const baseDir = isPackaged ? appDataDir : path.join(os.tmpdir(), 'OctosArmy-dev');

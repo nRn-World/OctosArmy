@@ -1,0 +1,14 @@
+node_modules
+.env
+.env.*
+dist
+release
+
+# Lokala/dev-artifakter (ska inte till GitHub)
+landing/
+workspace/
+*.code-workspace
+
+# Python cache
+__pycache__/
+*.pyc
