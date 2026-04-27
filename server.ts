@@ -19,6 +19,7 @@ const appDataDir = path.join(os.homedir(), "AppData", "Roaming", "OctosArmy");
 const configDir = path.join(appDataDir, "config");
 const rootsFile = path.join(configDir, "roots.json");
 const scheduleFile = path.join(configDir, "schedule.json");
+const ollamaFile = path.join(configDir, "ollama.json");
 
 if (!fs.existsSync(appDataDir)) fs.mkdirSync(appDataDir, { recursive: true });
 if (!fs.existsSync(configDir)) fs.mkdirSync(configDir, { recursive: true });
@@ -31,6 +32,12 @@ let cronTask: ReturnType<typeof cron.schedule> | null = null;
 let scheduledRunInProgress = false;
 let currentRunAbort: AbortController | null = null;
 let currentRunInProgress = false;
+const ALLOWED_OLLAMA_MODELS = ["gemma4:e4b", "deepseek-r1:14b", "qwen2.5-coder:32b"] as const;
+type AllowedOllamaModel = (typeof ALLOWED_OLLAMA_MODELS)[number];
+let selectedOllamaModel: AllowedOllamaModel = (() => {
+  const env = (process.env.OLLAMA_MODEL || "gemma4:e4b").trim().toLowerCase();
+  return (ALLOWED_OLLAMA_MODELS as readonly string[]).includes(env) ? (env as AllowedOllamaModel) : "gemma4:e4b";
+})();
 
 function loadRoots() {
   if (fs.existsSync(rootsFile)) {
@@ -80,6 +87,23 @@ function persistSchedule() {
   } catch (e) {}
 }
 
+function loadOllamaModel() {
+  if (!fs.existsSync(ollamaFile)) return;
+  try {
+    const raw = JSON.parse(fs.readFileSync(ollamaFile, "utf-8"));
+    const model = typeof raw?.model === "string" ? raw.model.trim().toLowerCase() : "";
+    if ((ALLOWED_OLLAMA_MODELS as readonly string[]).includes(model)) {
+      selectedOllamaModel = model as AllowedOllamaModel;
+    }
+  } catch (e) {}
+}
+
+function persistOllamaModel() {
+  try {
+    fs.writeFileSync(ollamaFile, JSON.stringify({ model: selectedOllamaModel }, null, 2));
+  } catch (e) {}
+}
+
 function setCronTask(expr: string | null) {
   if (cronTask) {
     try {
@@ -103,7 +127,7 @@ function setCronTask(expr: string | null) {
       loadRoots();
       const summary = await runOllamaAgentLoop({
         ollamaBaseUrl: (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
-        ollamaModel: (process.env.OLLAMA_MODEL || "gemma4:e4b").trim(),
+        ollamaModel: selectedOllamaModel,
         sandboxRoots: activeWorkspaceRoots,
         mission: scheduledMission,
         maxSteps: 200,
@@ -216,7 +240,7 @@ async function startServer() {
 
   app.get("/api/ollama/health", async (_req, res) => {
     const base = (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, "");
-    const model = (process.env.OLLAMA_MODEL || "gemma4:e4b").trim();
+    const model = selectedOllamaModel;
     try {
       const r = await fetch(`${base}/api/tags`);
       let modelAvailable: boolean | null = null;
@@ -233,6 +257,20 @@ async function startServer() {
     }
   });
 
+  app.get("/api/ollama/model", (_req, res) => {
+    return res.json({ ok: true, model: selectedOllamaModel, allowed: ALLOWED_OLLAMA_MODELS });
+  });
+
+  app.post("/api/ollama/model", (req, res) => {
+    const incoming = String(req.body?.model || "").trim().toLowerCase();
+    if (!(ALLOWED_OLLAMA_MODELS as readonly string[]).includes(incoming)) {
+      return res.status(400).json({ ok: false, error: "Invalid model" });
+    }
+    selectedOllamaModel = incoming as AllowedOllamaModel;
+    persistOllamaModel();
+    return res.json({ ok: true, model: selectedOllamaModel });
+  });
+
   app.post("/api/agents/run-ollama", async (req, res) => {
     loadRoots(); // Sync with electron-main.js state
     const mission = req.body?.mission || req.body?.globalMission || "";
@@ -244,7 +282,7 @@ async function startServer() {
       currentRunAbort = new AbortController();
       const summary = await runOllamaAgentLoop({
         ollamaBaseUrl: (process.env.OLLAMA_BASE_URL || "http://127.0.0.1:11434").replace(/\/$/, ""),
-        ollamaModel: (process.env.OLLAMA_MODEL || "gemma4:e4b").trim(),
+        ollamaModel: selectedOllamaModel,
         sandboxRoots: activeWorkspaceRoots,
         mission,
         maxSteps: 200,
@@ -356,6 +394,7 @@ async function startServer() {
 
 loadSchedule();
 setCronTask(scheduledCronExpr);
+loadOllamaModel();
 
 startServer().catch(err => {
   console.error("Failed to start server:", err);

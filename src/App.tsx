@@ -52,6 +52,8 @@ export default function App() {
   const [schedule, setSchedule] = useState("0 * * * *");
   const [mission, setMission] = useState("");
   const [isFetchingLogs, setIsFetchingLogs] = useState(false);
+  const [ollamaModel, setOllamaModel] = useState<"gemma4:e4b" | "deepseek-r1:14b" | "qwen2.5-coder:32b">("gemma4:e4b");
+  const [isSavingModel, setIsSavingModel] = useState(false);
   const [agentInstructions, setAgentInstructions] = useState<Record<string, string>>({});
   const [agents, setAgents] = useState(AGENTS);
   const [isConfigExpanded, setIsConfigExpanded] = useState(false);
@@ -192,6 +194,13 @@ export default function App() {
         const data = await res.json();
         if (data?.cronExpr) setSchedule(String(data.cronExpr));
         if (!mission.trim() && data?.mission) setMission(String(data.mission));
+      } catch (e) {}
+    })();
+    (async () => {
+      try {
+        const res = await fetch(apiUrl("/api/ollama/model"));
+        const data = await res.json();
+        if (data?.model) setOllamaModel(String(data.model) as any);
       } catch (e) {}
     })();
     const interval = setInterval(fetchLogs, 5000);
@@ -465,6 +474,36 @@ export default function App() {
         message: `Ollama-kontroll misslyckades: ${err.message}. Körs Ollama?`,
         type: "error",
       });
+    }
+  };
+
+  const saveOllamaModel = async (model: "gemma4:e4b" | "deepseek-r1:14b" | "qwen2.5-coder:32b") => {
+    if (isSavingModel) return;
+    setIsSavingModel(true);
+    setOllamaModel(model);
+    try {
+      const res = await fetch(apiUrl("/api/ollama/model"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ model }),
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || res.statusText);
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Ollama-modell satt till: ${model}`,
+        type: "success",
+      });
+    } catch (e: any) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Kunde inte spara modell: ${e.message}`,
+        type: "error",
+      });
+    } finally {
+      setIsSavingModel(false);
     }
   };
 
@@ -744,12 +783,25 @@ export default function App() {
                 <Activity className="w-4 h-4 text-orange-400" />
                 <h2 className="text-xs font-bold uppercase tracking-wider">Uppdragsmål</h2>
               </div>
-              <button 
-                onClick={testAIConnection}
-                className="text-[9px] px-2 py-1 rounded border border-orange-400/30 text-orange-400 hover:bg-orange-400/10 transition-all"
-              >
-                TESTA AI-ANSLUTNING
-              </button>
+              <div className="flex items-center gap-2">
+                <select
+                  value={ollamaModel}
+                  onChange={(e) => saveOllamaModel(e.target.value as any)}
+                  disabled={isSavingModel}
+                  className={`model-select h-7 bg-black border ${THEME.border} rounded px-2 text-[9px] font-bold uppercase tracking-wider text-[#00FF9D] focus:outline-none focus:border-[#00FF9D]/50 ${isSavingModel ? "opacity-70 cursor-wait" : "cursor-pointer"} [color-scheme:dark]`}
+                  title="Välj Ollama-modell"
+                >
+                  <option value="gemma4:e4b">Gemma 4:e4b</option>
+                  <option value="deepseek-r1:14b">Deepseek-r1:14b</option>
+                  <option value="qwen2.5-coder:32b">Qwen 2.5-Coder:32b</option>
+                </select>
+                <button
+                  onClick={testAIConnection}
+                  className="text-[9px] px-2 py-1 rounded border border-orange-400/30 text-orange-400 hover:bg-orange-400/10 transition-all"
+                >
+                  TESTA AI
+                </button>
+              </div>
             </div>
             <div className="p-4 space-y-3">
               <label className={`text-[10px] ${THEME.muted} uppercase block`}>Instruktioner till agenter</label>

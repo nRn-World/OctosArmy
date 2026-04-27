@@ -1,6 +1,14 @@
 @import "tailwindcss";
 
 @layer utilities {
+  .model-select,
+  .model-select option {
+    background-color: #000;
+  }
+  .model-select option {
+    color: #00FF9D;
+  }
+
   .animate-text-sweep {
     background: linear-gradient(
       to right,

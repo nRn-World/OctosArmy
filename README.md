@@ -41,16 +41,24 @@ OctosArmy kräver en lokal AI-hjärna för att fungera.
 ### 1. Installera Ollama
 Ladda ner och installera **Ollama** från [ollama.com](https://ollama.com).
 
-### 2. Ladda ner Gemma 4
-Öppna din terminal (PowerShell eller CMD) och kör följande kommando för att ladda ner agenternas språkmodell:
+### 2. Ladda ner modeller
+Öppna din terminal (PowerShell eller CMD) och kör följande kommandon för att ladda ner de modeller du vill använda:
 ```bash
 ollama pull gemma4:e4b
+ollama pull deepseek-r1:14b
+ollama pull qwen2.5-coder:32b
 ```
 
 ### 3. Installera OctosArmy
 Ladda ner den senaste versionen från [Releases](../../releases) och kör `OctosArmy-Setup-<version>.exe`.
 
 ---
+
+## 🧾 Versioner
+
+### v1.1.36
+*   **Ollama Modellväljare:** Välj modell direkt i appen (Gemma 4:e4b, Deepseek-r1:14b, Qwen 2.5-Coder:32b).
+*   **Persistens:** Ditt modellval sparas lokalt och används för alla agentkörningar.
 
 ## 👩‍💻 För Utvecklare (Development Setup)
 
