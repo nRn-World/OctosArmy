@@ -42,7 +42,7 @@ OctosArmy kräver en lokal AI-hjärna för att fungera.
 Ladda ner och installera **Ollama** från [ollama.com](https://ollama.com).
 
 ### 2. Ladda ner modeller
-Öppna din terminal (PowerShell eller CMD) och kör följande kommandon för att ladda ner de modeller du vill använda:
+Öppna din terminal (PowerShell eller CMD) och kör följande kommandon för att ladda ner de modeller du vill använda (minst en):
 ```bash
 ollama pull gemma4:e4b
 ollama pull deepseek-r1:14b
@@ -51,6 +51,8 @@ ollama pull qwen2.5-coder:32b
 
 ### 3. Installera OctosArmy
 Ladda ner den senaste versionen från [Releases](../../releases) och kör `OctosArmy-Setup-<version>.exe`.
+
+När appen startar kan du välja vilken modell agenterna ska använda direkt i UI:t.
 
 ---
 
@@ -89,9 +91,9 @@ npm run dev
 ---
 
 ## 🛠 Teknikstack
-*   **Frontend:** React, Tailwind CSS, Framer Motion
+*   **Frontend:** React, Tailwind CSS, Motion (motion/react)
 *   **Backend:** Node.js (Express), Electron
-*   **AI:** Ollama (Gemma 4 integration)
+*   **AI:** Ollama (Gemma 4:e4b / Deepseek-r1:14b / Qwen 2.5-Coder:32b)
 *   **Infrastruktur:** IPC Bridge för säker Windows-kommunikation
 
 ---
