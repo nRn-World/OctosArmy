@@ -113,3 +113,9 @@ Din integritet är vår prioritet. Eftersom OctosArmy körs lokalt skickas ingen
 <p align="center">
   <i>Utvecklat med kärlek av nRn World</i><br>
 </p>
+
+---
+
+☕ **Support development**: [Buy me a coffee 💜](https://ko-fi.com/nrnworld)
+
+Created by ❤️ © nRn World
