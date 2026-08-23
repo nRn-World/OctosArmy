@@ -2,117 +2,111 @@
 
 ![Banner](Screenshots/Start.png)
 
-**OctosArmy** är en kraftfull, AI-driven filhanteringsplattform som använder ett team av autonoma agenter för att utföra komplexa uppdrag i din Windows-miljö. Med avancerad "Command & Control"-logik och en säker sandlåda ger OctosArmy dig full kontroll över din data medan AI:n gör grovjobbet.
+**OctosArmy** is a powerful, AI-driven file management platform that uses a team of autonomous agents to carry out complex missions in your Windows environment. With advanced Command & Control logic and a secure sandbox, OctosArmy keeps you in full control of your data while the AI does the heavy lifting.
 
 ---
 
-## ✨ Nyckelfunktioner
+## ✨ Key Features
 
-*   **Hierarkiskt Agent-team:** Scout, Brainstormer, Kodare, Granskare, Auditör och Säkerhetsspecialist samarbetar för att lösa dina uppgifter.
-*   **Säker Sandlåda (Mappbehörighet):** AI-agenterna kan *endast* röra mappar som du uttryckligen har gett dem tillåtelse till.
-*   **Självkorrigerande logik:** Om Agent 4 (Granskaren) inte är nöjd med arbetet skickas uppdraget automatiskt tillbaka till Agent 1 för omstart.
-*   **Lokal AI-motor:** All processering sker lokalt på din dator via Ollama för maximal integritet.
-*   **Avancerad Schemaläggning:** Kör dina AI-pipelines automatiskt baserat på tid eller händelser.
-*   **Körs i Bakgrunden:** Minimeras till systemfältet (System Tray) för att tyst övervaka och köra uppdrag enligt schema utan att störa dig.
-*   **Sömlösa Uppdateringar:** Inbyggd auto-updater med UI-notiser som laddar ner nya versioner automatiskt i bakgrunden.
+*   **Hierarchical Agent Team:** Scout, Brainstormer, Coder, Reviewer, Auditor, and Security Specialist collaborate to solve your tasks.
+*   **Secure Sandbox (Folder Permissions):** AI agents can *only* touch folders you have explicitly granted them access to.
+*   **Self-Correcting Logic:** If Agent 4 (Reviewer) is not satisfied with the work, the mission is automatically sent back to Agent 1 for a restart.
+*   **Local AI Engine:** All processing runs locally on your machine via Ollama for maximum privacy.
+*   **Advanced Scheduling:** Run your AI pipelines automatically based on time or events.
+*   **Runs in the Background:** Minimizes to the system tray to quietly monitor and run scheduled missions without interrupting you.
+*   **Seamless Updates:** Built-in auto-updater with UI notifications that downloads new versions automatically in the background.
 
 ---
 
 ## 📸 Screenshots
 
-### Dashboard & Arbetsytor
+### Dashboard & Workspaces
 ![Start Screen](Screenshots/Start2.png)
-*Håll koll på dina mappar och behörigheter i realtid.*
+*Keep track of your folders and permissions in real time.*
 
-### Agent-konfiguration
+### Agent Configuration
 ![Agents](Screenshots/Agents.png)
-*Se hur de olika agenterna arbetar tillsammans i kedjan.*
+*See how the different agents work together in the chain.*
 
-### Uppdragskonsol
+### Mission Console
 ![Mission Progress](Screenshots/Finish.png)
-*Detaljerad loggning av varje steg agenterna tar.*
+*Detailed logging of every step the agents take.*
 
 ---
 
-## 🚀 Kom igång (Viktigt!)
+## 🚀 Getting Started (Important!)
 
-OctosArmy kräver en lokal AI-hjärna för att fungera.
+OctosArmy requires a local AI engine to function.
 
-### 1. Installera Ollama
-Ladda ner och installera **Ollama** från [ollama.com](https://ollama.com).
+### 1. Install Ollama
+Download and install **Ollama** from [ollama.com](https://ollama.com).
 
-### 2. Ladda ner modeller
-Öppna din terminal (PowerShell eller CMD) och kör följande kommandon för att ladda ner de modeller du vill använda (minst en):
+### 2. Pull Models
+Open your terminal (PowerShell or CMD) and run the following commands to download the models you want to use (at least one):
 ```bash
 ollama pull gemma4:e4b
 ollama pull deepseek-r1:14b
 ollama pull qwen2.5-coder:32b
 ```
 
-### 3. Installera OctosArmy
-Ladda ner den senaste versionen från [Releases](../../releases) och kör `OctosArmy-Setup-<version>.exe`.
+### 3. Install OctosArmy
+Download the latest version from [Releases](../../releases) and run `OctosArmy-Setup-<version>.exe`.
 
-När appen startar kan du välja vilken modell agenterna ska använda direkt i UI:t.
+When the app starts, you can choose which model the agents should use directly in the UI.
 
 ---
 
-## 🧾 Versioner
+## 🧾 Versions
 
 ### v1.1.36
-*   **Ollama Modellväljare:** Välj modell direkt i appen (Gemma 4:e4b, Deepseek-r1:14b, Qwen 2.5-Coder:32b).
-*   **Persistens:** Ditt modellval sparas lokalt och används för alla agentkörningar.
+*   **Ollama Model Selector:** Choose a model directly in the app (Gemma 4:e4b, Deepseek-r1:14b, Qwen 2.5-Coder:32b).
+*   **Persistence:** Your model choice is saved locally and used for all agent runs.
 
-## 👩‍💻 För Utvecklare (Development Setup)
+## 👩‍💻 For Developers (Development Setup)
 
-Vill du hjälpa till att utveckla OctosArmy? Så här kommer du igång med din egen utvecklingsmiljö:
+Want to help develop OctosArmy? Here's how to get your local development environment running:
 
-### 1. Klona repositoryt
+### 1. Clone the repository
 ```bash
 git clone https://github.com/nRn-World/OctosArmy.git
 cd OctosArmy
 ```
 
-### 2. Installera beroenden
+### 2. Install dependencies
 ```bash
 npm install
 ```
 
-### 3. Starta utvecklingsläge
-Bygger gränssnittet, startar Electron och backend (inkl. API:et på port 3000).
+### 3. Start development mode
+Builds the UI, starts Electron and the backend (including the API on port 3000).
 ```bash
 npm run dev:electron
 ```
 
-Om du bara vill köra backend utan Electron (t.ex. för API-test):
+If you only want to run the backend without Electron (e.g. for API testing):
 ```bash
 npm run dev
 ```
 
 ---
 
-## 🛠 Teknikstack
+## 🛠 Tech Stack
 *   **Frontend:** React, Tailwind CSS, Motion (motion/react)
 *   **Backend:** Node.js (Express), Electron
 *   **AI:** Ollama (Gemma 4:e4b / Deepseek-r1:14b / Qwen 2.5-Coder:32b)
-*   **Infrastruktur:** IPC Bridge för säker Windows-kommunikation
+*   **Infrastructure:** IPC Bridge for secure Windows communication
 
 ---
 
-## 🤝 Community & Bidrag
-Vi välkomnar bidrag! OctosArmy är byggt för att växa.
-*   Hittat en bugg? Öppna en [Issue](../../issues).
-*   Vill du bidra med kod? Se vår [CONTRIBUTING.md](CONTRIBUTING.md).
+## 🤝 Community & Contributing
+We welcome contributions! OctosArmy is built to grow.
+*   Found a bug? Open an [Issue](../../issues).
+*   Want to contribute code? See our [CONTRIBUTING.md](CONTRIBUTING.md).
 
 ---
 
-## 🛡 Säkerhet
-Din integritet är vår prioritet. Eftersom OctosArmy körs lokalt skickas ingen fildata till molnet. Läs mer i vår [SECURITY.md](SECURITY.md).
-
----
-
-<p align="center">
-  <i>Utvecklat med kärlek av nRn World</i><br>
-</p>
+## 🛡 Security
+Your privacy is our priority. Because OctosArmy runs locally, no file data is sent to the cloud. Read more in our [SECURITY.md](SECURITY.md).
 
 ---
 
