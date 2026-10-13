@@ -11,6 +11,8 @@
 *   **Hierarchical Agent Team:** Scout, Brainstormer, Coder, Reviewer, Auditor, and Security Specialist collaborate to solve your tasks.
 *   **Secure Sandbox (Folder Permissions):** AI agents can *only* touch folders you have explicitly granted them access to.
 *   **Self-Correcting Logic:** If Agent 4 (Reviewer) is not satisfied with the work, the mission is automatically sent back to Agent 1 for a restart.
+*   **Reset to a Clean Slate:** The NOLLSTÄLL button stops the run and clears the log, mission, agent instructions, schedule and folder permissions in one step. Your files are never touched, and the confirmation dialog says so before you accept.
+*   **Folder Picker Everywhere:** Grant a folder by clicking through the disk — in the app window and in an ordinary browser tab, where the native folder dialog does not exist.
 *   **Gemma 4 Only:** The agents run on Gemma 4 models and nothing else — the app refuses every other model, so a slow 32B reasoning model can never be selected by mistake.
 *   **Local AI Engine:** All processing runs locally on your machine via Ollama for maximum privacy.
 *   **Advanced Scheduling:** Run your AI pipelines automatically based on time or events.
@@ -39,6 +41,8 @@
 
 OctosArmy requires a local AI engine to function.
 
+**What you need:** Windows 10 or 11 (64-bit), [Ollama](https://ollama.com) installed and running, and at least one Gemma 4 model pulled. The installer installs for all users, so Windows will ask for administrator permission.
+
 ### 1. Install Ollama
 Download and install **Ollama** from [ollama.com](https://ollama.com).
 
@@ -59,6 +63,22 @@ Download the latest version from [Releases](../../releases) and run `OctosArmy-S
 When the app starts, the dropdown in the mission panel lists the Gemma 4 models you have
 installed, and the default one is used until you pick another.
 
+### 4. Grant a folder and run your first mission
+
+An agent can only touch folders you have added, so nothing happens before there is at least one.
+
+1.  Under **ARBETSYTOR & BEHÖRIGHETER**, use the folder icon to click your way to a folder (or type
+    the path and press **LÄGG TILL**). The permission covers that folder and everything below it.
+2.  Describe the mission under **UPPDRAGSMÅL**, for example *"copy every file in
+    C:\\Users\\<you>\\Desktop\\TEST1 to C:\\Users\\<you>\\Desktop\\TEST2"*.
+3.  Press **KÖR PIPELINE**. The six agents work through the mission and every step is written to
+    the mission console. **NÖDSTOPP** aborts the run at any point.
+4.  Press **NOLLSTÄLL** when you want to start over from zero. It clears the settings above and
+    nothing else — no file on disk is deleted, moved or changed.
+
+Updates arrive by themselves: every installed copy checks the Releases page on start and
+notifies you when a new version is ready.
+
 ---
 
 ## 🧾 Versions
@@ -71,6 +91,17 @@ installed, and the default one is used until you pick another.
 ### v1.1.36
 *   **Ollama Model Selector:** Choose between Gemma 4:e4b, Deepseek-r1:14b and Qwen 2.5-Coder:32b directly in the app.
 *   **Persistence:** Your model choice is saved locally and used for all agent runs.
+
+Older builds are listed on the [Releases](../../releases) page.
+
+| Version | Released |
+| --- | --- |
+| v1.1.37 | 2026-10-13 |
+| v1.1.36 | 2026-04-27 |
+| v1.1.35 | 2026-04-20 |
+| v1.1.34 | 2026-04-19 |
+| v1.1.33 | 2026-04-19 |
+| v1.1.32 | 2026-04-19 |
 
 ## 👩‍💻 For Developers (Development Setup)
 
@@ -97,6 +128,21 @@ If you only want to run the backend without Electron (e.g. for API testing):
 ```bash
 npm run dev
 ```
+
+### 4. Checks before you push
+```bash
+npm run typecheck   # TypeScript, no emit
+npm test            # sandbox, approval flow, pre-approved run, folder browsing, model allowlist
+```
+
+### 5. Build and publish a release
+```bash
+npm run dist        # build the UI, bundle the server, produce release\OctosArmy Setup <version>.exe
+```
+Bump `version` in `package.json` first — the updater compares it against the Releases page. To
+upload a build, run `npx electron-builder --win --publish always` with a GitHub token in
+`GH_TOKEN` (the script alone builds locally without publishing). Tag the release commit so the
+source of a published installer stays findable.
 
 ---
 
