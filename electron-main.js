@@ -1,11 +1,11 @@
-import { app, BrowserWindow, dialog, ipcMain, Tray, Menu } from 'electron';
+import { app, BrowserWindow, dialog, ipcMain, Tray, Menu, shell } from 'electron';
 import updaterPkg from 'electron-updater';
 const { autoUpdater } = updaterPkg;
 import log from 'electron-log';
 import path from 'path';
 import fs from 'fs';
 import os from 'os';
-import { fileURLToPath, pathToFileURL } from 'url';
+import { fileURLToPath } from 'url';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -24,7 +24,6 @@ if (!fs.existsSync(appDataDir)) fs.mkdirSync(appDataDir, { recursive: true });
 if (isPackaged) {
   process.env.NODE_ENV = 'production';
   process.env.DIST_PATH = path.join(process.resourcesPath, 'dist');
-
   const envPath = path.join(appDataDir, '.env');
   if (fs.existsSync(envPath)) {
     try {
@@ -54,6 +53,11 @@ if (isPackaged) {
 // Fallback defaults for Ollama
 if (!process.env.OLLAMA_BASE_URL) process.env.OLLAMA_BASE_URL = 'http://localhost:11434';
 if (!process.env.OLLAMA_MODEL) process.env.OLLAMA_MODEL = 'gemma4:e4b';
+
+// The backend and this process must agree on the port: the UI is served by the backend.
+const BACKEND_PORT = Number(process.env.OCTOS_PORT || 3000);
+process.env.OCTOS_PORT = String(BACKEND_PORT);
+const BACKEND_ORIGIN = `http://127.0.0.1:${BACKEND_PORT}`;
 
 try {
   const baseDir = isPackaged ? appDataDir : path.join(os.tmpdir(), 'OctosArmy-dev');
@@ -120,10 +124,14 @@ ipcMain.handle('pick-folder', async () => {
 ipcMain.handle('get-roots', () => activeWorkspaceRoots);
 
 ipcMain.handle('set-roots', (event, roots) => {
-  activeWorkspaceRoots = Array.from(new Set(roots.map(r => {
-    const cleaned = r.trim().replace(/[\\/]+$/, "");
-    return path.resolve(cleaned);
-  })));
+  if (!Array.isArray(roots)) return activeWorkspaceRoots;
+  activeWorkspaceRoots = Array.from(new Set(roots
+    .filter((r) => typeof r === 'string' && r.trim().length > 0)
+    .slice(0, 10)
+    .map(r => {
+      const cleaned = r.trim().replace(/[\\/]+$/, "");
+      return path.resolve(cleaned);
+    })));
   activeWorkspaceRoots.forEach(r => {
     if (!fs.existsSync(r)) {
       try { fs.mkdirSync(r, { recursive: true }); } catch(e) {}
@@ -150,21 +158,52 @@ async function startBackend() {
       : path.join(__dirname, 'dist', 'server.cjs');
 
     log.info('Startar backend-server: ' + serverPath);
-    
+
     const { createRequire } = await import('module');
     const require = createRequire(import.meta.url);
     require(serverPath);
-    
-    log.info('Backend-server startad på port 3000');
+
+    log.info('Backend-server startad på port ' + BACKEND_PORT);
     return true;
   } catch (err) {
-    if (String(err?.message || err).includes('EADDRINUSE')) {
-      log.warn('Backend-port 3000 är redan upptagen. Antar att backend redan körs och fortsätter.');
-      return true;
-    }
     log.error('SERVERFEL: ' + err.message);
     log.error(err.stack);
     return false;
+  }
+}
+
+/** Wait until the backend actually answers, instead of guessing that it is up. */
+async function waitForBackend(timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    try {
+      const res = await fetch(BACKEND_ORIGIN + '/api/health');
+      if (res.ok) return true;
+    } catch {
+      // Not listening yet.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 300));
+  }
+  return false;
+}
+
+/**
+ * electron-updater only verifies an update's Authenticode signature when the build
+ * declares a publisherName. Without one it installs whatever it downloaded, so say so
+ * loudly instead of pretending the update channel is verified.
+ */
+function checkUpdateSignaturePolicy() {
+  try {
+    const ymlPath = path.join(process.resourcesPath, 'app-update.yml');
+    if (!fs.existsSync(ymlPath)) return;
+    const yml = fs.readFileSync(ymlPath, 'utf-8');
+    if (/^\s*publisherName\s*:/m.test(yml)) return;
+    log.warn(
+      'SECURITY: updates are installed without code-signature verification because this build has no ' +
+        'publisherName configured. Sign the build and set build.win.publisherName to close this gap.'
+    );
+  } catch (e) {
+    log.warn('Kunde inte granska app-update.yml: ' + e.message);
   }
 }
 
@@ -187,7 +226,10 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       preload: preloadPath,
-      webSecurity: false,
+      sandbox: true,
+      // The UI is served by the local backend over http://127.0.0.1, so the browser's
+      // normal security model (same-origin policy, CORS) stays enabled.
+      webSecurity: true,
     },
   });
 
@@ -199,20 +241,39 @@ function createWindow() {
     }
   });
 
-  const distPath = isPackaged
-    ? path.join(process.resourcesPath, 'dist')
-    : path.join(__dirname, 'dist');
-
-  const indexPath = path.join(distPath, 'index.html');
-
-  // Start backend server FIRST, then load UI
-  startBackend().then((ok) => {
-    if (ok) {
-      log.info('Server OK – laddar UI: ' + indexPath);
-    } else {
-      log.warn('Server MISSLYCKADES – laddar UI ändå (IPC fungerar fortfarande)');
+  // Foreign links open in the real browser; the app window never navigates away.
+  mainWindow.webContents.setWindowOpenHandler(({ url }) => {
+    if (url.startsWith(BACKEND_ORIGIN)) return { action: 'allow' };
+    shell.openExternal(url).catch(() => {});
+    return { action: 'deny' };
+  });
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (!url.startsWith(BACKEND_ORIGIN)) {
+      event.preventDefault();
+      shell.openExternal(url).catch(() => {});
     }
-    mainWindow.loadURL(pathToFileURL(indexPath).href).catch(err => {
+  });
+
+  // Start backend server FIRST, wait for it to actually answer, then load the UI from it.
+  startBackend().then(async (ok) => {
+    if (!ok) {
+      dialog.showErrorBox(
+        'OctosArmy – backend kunde inte startas',
+        'Den lokala servern startade inte. Stäng andra program på port ' +
+          BACKEND_PORT +
+          ' och starta OctosArmy igen. Se loggen för detaljer.'
+      );
+    }
+    const ready = await waitForBackend();
+    if (!ready) {
+      log.error('Backend svarade inte inom tidsgränsen.');
+      dialog.showErrorBox(
+        'OctosArmy – backend svarar inte',
+        'Ingen kontakt med http://127.0.0.1:' + BACKEND_PORT + '. Kontrollera loggen.'
+      );
+    }
+    log.info('Laddar UI från ' + BACKEND_ORIGIN);
+    mainWindow.loadURL(BACKEND_ORIGIN + '/').catch((err) => {
       log.error('LADDNINGSFEL: ' + err.message);
     });
   });
@@ -223,6 +284,8 @@ app.whenReady().then(() => {
 
   if (isPackaged) {
     autoUpdater.logger = log;
+    autoUpdater.allowDowngrade = false;
+    checkUpdateSignaturePolicy();
     autoUpdater.checkForUpdatesAndNotify();
 
     autoUpdater.on('checking-for-update', () => {

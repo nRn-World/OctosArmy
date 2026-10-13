@@ -28,7 +28,7 @@ def main(argv: list[str] | None = None) -> int:
         "--model",
         dest="model",
         default=None,
-        help="Ollama model name, e.g. gemma2:9b (overrides OLLAMA_MODEL)",
+        help="Ollama model name, e.g. gemma4:e4b (overrides OLLAMA_MODEL)",
     )
     args = p.parse_args(argv)
 

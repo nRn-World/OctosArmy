@@ -75,33 +75,71 @@ UPPGIFT: Berätta för användaren att allt är klart och sammanfatta resultatet
 UPPGIFT: Berätta i detalj vad alla agenter (1-2-3-4-5) har gjort. Du ska ge en slutrapport för uppdraget.`
 };
 
+/**
+ * Resolve the real location of a path, following symlinks/junctions.
+ * The path itself may not exist yet (files we are about to create), so we resolve the
+ * nearest existing ancestor and re-attach the missing tail.
+ */
+export function resolveWithRealAncestor(target: string): string {
+  const absolute = path.resolve(target);
+  const missing: string[] = [];
+  let current = absolute;
+  while (true) {
+    try {
+      return path.join(fs.realpathSync.native(current), ...missing);
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) return absolute;
+      missing.unshift(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+function normalizeForCompare(p: string): string {
+  const slashed = p.replace(/\\/g, "/");
+  // Windows/macOS filesystems are case-insensitive, so fold case there. On a
+  // case-sensitive filesystem a mismatch fails closed, which is the safe direction.
+  return process.platform === "win32" ? slashed.toLowerCase() : slashed;
+}
+
 function isPathInsideRoot(workspaceRoot: string, absolutePath: string): boolean {
-  const r = path.resolve(workspaceRoot).replace(/\\/g, "/").toLowerCase();
-  const p = path.resolve(absolutePath).replace(/\\/g, "/").toLowerCase();
+  const r = normalizeForCompare(workspaceRoot);
+  const p = normalizeForCompare(absolutePath);
   return p === r || p.startsWith(r + "/");
 }
 
-export function validateSandboxPath(workspaceRoots: string[], targetPath: string): string {
-  const absolutePath = path.resolve(targetPath);
-  
-  // Check if absolutePath is inside any of the roots
-  const isInside = workspaceRoots.some(root => {
-    const r = path.resolve(root).replace(/\\/g, "/").toLowerCase();
-    const p = absolutePath.replace(/\\/g, "/").toLowerCase();
-    return p === r || p.startsWith(r + "/");
-  });
+/** Roots resolved to their real path, so symlinked roots compare correctly too. */
+export function realRoots(workspaceRoots: string[]): string[] {
+  return workspaceRoots.map((root) => resolveWithRealAncestor(root));
+}
 
-  if (isInside) return absolutePath;
+export function validateSandboxPath(workspaceRoots: string[], targetPath: string): string {
+  const roots = realRoots(workspaceRoots);
+  const absolutePath = resolveWithRealAncestor(targetPath);
+
+  if (roots.some((root) => isPathInsideRoot(root, absolutePath))) return absolutePath;
 
   // If not, try resolving it relative to each root to see if it lands inside
-  for (const root of workspaceRoots) {
-    const trial = path.resolve(root, targetPath);
-    const r = path.resolve(root).replace(/\\/g, "/").toLowerCase();
-    const p = trial.replace(/\\/g, "/").toLowerCase();
-    if (p === r || p.startsWith(r + "/")) return trial;
+  for (const root of roots) {
+    const trial = resolveWithRealAncestor(path.resolve(root, targetPath));
+    if (isPathInsideRoot(root, trial)) return trial;
   }
 
-  throw new Error("Security Violation: Path is outside allowed sandbox roots.");
+  // The message has to name the offending path and the folders that ARE allowed, and say
+  // plainly that no permission can be granted mid-run. Without that, a model whose path is
+  // refused starts guessing, or asks the user for a folder it can never get.
+  throw new Error(
+    `Security Violation: Path is outside allowed sandbox roots. ` +
+      `Fordrad sökväg: "${targetPath}". Tillåtna rötter: ${roots.map((r) => `"${r}"`).join(", ")}. ` +
+      `Utför åtgärden inom dessa mappar i stället — behörigheter kan inte ändras under en körning.`
+  );
+}
+
+/** True when the path IS one of the sandbox roots themselves. */
+export function isSandboxRoot(workspaceRoots: string[], absolutePath: string): boolean {
+  const p = normalizeForCompare(absolutePath);
+  return realRoots(workspaceRoots).some((root) => normalizeForCompare(root) === p);
 }
 
 const FORBIDDEN = /[`;&|\n\r<>$]/;
@@ -180,6 +218,14 @@ function runTerminalSafe(
     encoding: "utf-8",
     maxBuffer: maxOut,
     timeout: timeoutSec * 1000,
+    env: {
+      ...process.env,
+      // Reduces how much third-party code pytest can pull in by itself. Note that a
+      // conftest.py in cwd is still imported by design — which is exactly why
+      // run_terminal always goes through the human approval gate.
+      PYTEST_DISABLE_PLUGIN_AUTOLOAD: "1",
+      PYTHONDONTWRITEBYTECODE: "1",
+    },
   });
   const stdout = (r.stdout || "").slice(0, maxOut);
   const stderr = (r.stderr || "").slice(0, maxOut);
@@ -187,6 +233,20 @@ function runTerminalSafe(
     return { code: 124, stdout, stderr: stderr + "\n[timeout]" };
   }
   return { code: r.status ?? 1, stdout, stderr };
+}
+
+/**
+ * Accept extensions written with or without the leading dot, plus "*" for everything.
+ * path.extname() always returns ".png", so a model that answers ["png"] used to match
+ * nothing — and the old code still reported the move as successful.
+ */
+function normalizeExtensions(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  return raw
+    .filter((e): e is string => typeof e === "string")
+    .map((e) => e.trim().toLowerCase())
+    .filter(Boolean)
+    .map((e) => (e === "*" || e.startsWith(".") ? e : `.${e}`));
 }
 
 function parseAgentJson(text: string): Record<string, unknown> {
@@ -229,72 +289,225 @@ function validateEnvelope(obj: Record<string, unknown>): void {
   }
 }
 
+function intFromEnv(name: string, fallback: number): number {
+  const raw = Number(process.env[name]);
+  return Number.isFinite(raw) && raw > 0 ? raw : fallback;
+}
+
+/** Hard ceiling for one model call, so a wedged Ollama can never hang the UI forever. */
+const OLLAMA_CALL_TIMEOUT_MS = intFromEnv("OCTOSARMY_OLLAMA_TIMEOUT", 900) * 1000;
+/** If the model stops emitting anything for this long, the call is considered dead. */
+const OLLAMA_STALL_TIMEOUT_MS = intFromEnv("OCTOSARMY_OLLAMA_STALL", 90) * 1000;
+/** Below this generation speed the model is impractically slow and we say so once. */
+export const SLOW_MODEL_TOKENS_PER_SEC = 8;
+
+export type ChatProgress = {
+  agentId: string;
+  tokens: number;
+  elapsedMs: number;
+  tokensPerSecond: number;
+};
+
+/**
+ * One call to Ollama, streamed.
+ *
+ * Streaming is what makes progress visible: we can report how much the model has
+ * produced and how fast, and we can tell a slow model apart from a dead connection.
+ * A 14B reasoning model on a partly CPU-offloaded GPU generates a couple of tokens per
+ * second, which used to look exactly like a freeze.
+ */
 async function ollamaChat(
   baseUrl: string,
   model: string,
   messages: { role: string; content: string }[],
-  signal?: AbortSignal
+  signal: AbortSignal | undefined,
+  onProgress: (progress: ChatProgress) => void,
+  agentId: string
 ): Promise<string> {
   const url = `${baseUrl.replace(/\/$/, "")}/api/chat`;
-  const resp = await fetch(url, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      model,
-      messages,
-      stream: false,
-      format: "json",
-      options: { temperature: 0.1 },
-    }),
-    signal,
-  });
-  if (!resp.ok) {
-    const t = await resp.text();
-    throw new Error(`Ollama HTTP ${resp.status}: ${t.slice(0, 500)}`);
-  }
-  const data = (await resp.json()) as { message?: { content?: string } };
-  const content = data.message?.content;
-  if (typeof content !== "string") throw new Error("Unexpected Ollama response shape");
-  return content.trim();
-}
+  const controller = new AbortController();
+  const startedAt = Date.now();
+  let lastActivityAt = startedAt;
+  let stopReason: "timeout" | "stalled" | null = null;
 
-function listFilesNonRecursive(workspaceRoots: string[], subDir: string): string {
+  const onExternalAbort = () => controller.abort();
+  if (signal) {
+    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+    signal.addEventListener("abort", onExternalAbort, { once: true });
+  }
+
+  const watchdog = setInterval(() => {
+    const now = Date.now();
+    if (now - lastActivityAt > OLLAMA_STALL_TIMEOUT_MS) {
+      stopReason = "stalled";
+      controller.abort();
+    } else if (now - startedAt > OLLAMA_CALL_TIMEOUT_MS) {
+      stopReason = "timeout";
+      controller.abort();
+    }
+  }, 1000);
+
+  const cleanup = () => {
+    clearInterval(watchdog);
+    signal?.removeEventListener("abort", onExternalAbort);
+  };
+
   try {
-    const base = validateSandboxPath(workspaceRoots, subDir);
-    const entries = fs.readdirSync(base, { withFileTypes: true });
-    const lines = entries.map(e => {
-      const type = e.isDirectory() ? "[DIR]" : "[FILE]";
-      return `${type} ${e.name}`;
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model,
+        messages,
+        stream: true,
+        format: "json",
+        options: { temperature: 0.1 },
+      }),
+      signal: controller.signal,
     });
-    return lines.length ? lines.sort().join("\n") : "(empty)";
+    if (!resp.ok) {
+      const t = await resp.text();
+      throw new Error(`Ollama HTTP ${resp.status}: ${t.slice(0, 500)}`);
+    }
+
+    // No stream support (or no body): fall back to parsing the whole response at once.
+    if (!resp.body) {
+      const data = (await resp.json()) as { message?: { content?: string } };
+      const content = data.message?.content;
+      if (typeof content !== "string") throw new Error("Unexpected Ollama response shape");
+      return content.trim();
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let content = "";
+    let tokens = 0;
+    let lastProgressAt = startedAt;
+
+    const handleLine = (line: string) => {
+      if (!line) return;
+      let chunk: any;
+      try {
+        chunk = JSON.parse(line);
+      } catch {
+        return; // partial or keep-alive line
+      }
+      lastActivityAt = Date.now();
+      if (chunk.error) throw new Error(`Ollama error: ${chunk.error}`);
+      const piece = chunk.message?.content;
+      if (typeof piece === "string" && piece) {
+        content += piece;
+        tokens += 1; // Ollama emits roughly one token per chunk
+      }
+      if (typeof chunk.eval_count === "number" && chunk.eval_count > 0) {
+        tokens = chunk.eval_count;
+      }
+
+      const elapsedMs = Date.now() - startedAt;
+      if (elapsedMs - (lastProgressAt - startedAt) < 4000) return;
+      lastProgressAt = Date.now();
+      const tokensPerSecond = elapsedMs > 0 ? tokens / (elapsedMs / 1000) : 0;
+      onProgress({ agentId, tokens, elapsedMs, tokensPerSecond });
+    };
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let index: number;
+      while ((index = buffer.indexOf("\n")) >= 0) {
+        const line = buffer.slice(0, index).trim();
+        buffer = buffer.slice(index + 1);
+        handleLine(line);
+      }
+    }
+    handleLine(buffer.trim());
+
+    if (!content.trim()) throw new Error("Ollama returned an empty response");
+    return content.trim();
   } catch (e: any) {
-    return `Error: ${e.message}`;
+    if (stopReason === "timeout") {
+      const seconds = Math.round(OLLAMA_CALL_TIMEOUT_MS / 1000);
+      throw new Error(
+        `Ollama svarade inte inom ${seconds} s och anropet avbröts. ` +
+          `Det är vanligtvis en för långsam Gemma 4-modell: kontrollera hastigheten i loggen och välj en mindre ` +
+          `variant i UPPDRAGSMÅL. (Tidsgränsen kan höjas med OCTOSARMY_OLLAMA_TIMEOUT.)`
+      );
+    }
+    if (stopReason === "stalled") {
+      const seconds = Math.round(OLLAMA_STALL_TIMEOUT_MS / 1000);
+      throw new Error(
+        `Ollama slutade svara i ${seconds} s och anropet avbröts. Kontrollera att Ollama körs och att modellen kan laddas.`
+      );
+    }
+    throw e;
+  } finally {
+    cleanup();
   }
 }
 
-function searchFilesRecursive(workspaceRoots: string[], query: string): string[] {
+/**
+ * List one directory. Throws on a refused path or an unreadable directory.
+ *
+ * It used to swallow those errors and return the text "Error: ..." as if it were a
+ * directory listing, while the caller reported ok:true and logged "Listed …" as a success.
+ * A model that was actually blocked was told everything worked, so it kept going — asking
+ * for permissions and finally hitting the wall on a real action.
+ */
+function listFilesNonRecursive(workspaceRoots: string[], subDir: string): string {
+  const base = validateSandboxPath(workspaceRoots, subDir);
+  const entries = fs.readdirSync(base, { withFileTypes: true });
+  const lines = entries.map(e => {
+    const type = e.isDirectory() ? "[DIR]" : "[FILE]";
+    return `${type} ${e.name}`;
+  });
+  return lines.length ? lines.sort().join("\n") : "(empty)";
+}
+
+const SEARCH_SKIP_DIRS = new Set(["node_modules", ".git", "$RECYCLE.BIN", "System Volume Information", "__pycache__"]);
+const SEARCH_MAX_RESULTS = 2000;
+const SEARCH_MAX_DEPTH = 12;
+
+export function searchFilesRecursive(workspaceRoots: string[], query: string): string[] {
   const results: string[] = [];
   const q = query.toLowerCase().trim();
-  
-  function walk(dir: string, root: string) {
-    const entries = fs.readdirSync(dir, { withFileTypes: true });
+  if (!q) return results;
+
+  function walk(dir: string, root: string, depth: number) {
+    // An unreadable directory must not abort the whole search.
+    if (results.length >= SEARCH_MAX_RESULTS || depth > SEARCH_MAX_DEPTH) return;
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(dir, { withFileTypes: true });
+    } catch {
+      return;
+    }
     for (const e of entries) {
+      if (results.length >= SEARCH_MAX_RESULTS) return;
+      if (e.isDirectory() && SEARCH_SKIP_DIRS.has(e.name)) continue;
       const full = path.join(dir, e.name);
       const rel = path.relative(root, full).split(path.sep).join("/");
       if (rel.toLowerCase().includes(q) || e.name.toLowerCase().includes(q)) {
         results.push(`${root}: ${rel}`);
       }
       if (e.isDirectory()) {
-        walk(full, root);
+        walk(full, root, depth + 1);
       }
     }
   }
-  
+
   workspaceRoots.forEach(root => {
-    if (fs.existsSync(root)) walk(root, root);
+    if (fs.existsSync(root)) walk(root, root, 0);
   });
   return results;
 }
+
+export type ApprovalRequest = {
+  intent: string;
+  detail: string;
+  riskLevel: string;
+};
 
 export type RunOllamaOptions = {
   ollamaBaseUrl: string;
@@ -306,7 +519,38 @@ export type RunOllamaOptions = {
   maxTerminalOutputChars: number;
   onLog: (log: AgentLog) => void;
   abortSignal?: AbortSignal;
+  /** Which agents take part, in order. Defaults to the full six-agent chain. */
+  agentSequence?: string[];
+  /**
+   * Human approval before anything destructive or code-executing runs.
+   * When omitted, those intents are refused (fails closed for unattended runs).
+   */
+  requestApproval?: (request: ApprovalRequest) => Promise<boolean>;
+  /**
+   * The run was approved up front, so destructive intents proceed without stopping.
+   * Every one of them is still logged, so there is always a record of what happened.
+   * This is the "one approval, then the agents work undisturbed" mode the UI uses.
+   */
+  autoApproveDestructive?: boolean;
 };
+
+/** Intents that can destroy data or execute code always need a human in the loop. */
+const APPROVAL_REQUIRED_INTENTS = new Set([
+  "delete_path",
+  "empty_dir",
+  "move_path",
+  "bulk_move",
+  "run_terminal",
+]);
+
+/**
+ * True when an intent must be approved by a human before it runs.
+ * Destructive intents are gated regardless of which risk_level the model claims, so a
+ * model that labels a delete as "low" cannot talk its way past the gate.
+ */
+export function requiresApproval(intent: string, riskLevel: string): boolean {
+  return APPROVAL_REQUIRED_INTENTS.has(intent) || riskLevel === "high";
+}
 
 export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string> {
   const {
@@ -319,6 +563,8 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     maxTerminalOutputChars,
     onLog,
     abortSignal,
+    requestApproval,
+    autoApproveDestructive = false,
   } = opts;
 
   const log = (msg: string, type: AgentLog["type"] = "info", agentId: string = "System") => {
@@ -331,7 +577,51 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     }
   };
 
-  const agentSequence = ["scout", "brainstormer", "coder", "reviewer", "auditor", "security"];
+  // A denial is final for the rest of this run: the model otherwise happily re-asks the
+  // same destructive action on the next step and nags the user forever.
+  const deniedThisRun = new Set<string>();
+
+  /**
+   * Destructive and code-executing intents stop here until a human says yes.
+   * Without an approval channel (scheduled runs) they are refused outright.
+   */
+  const gate = async (intent: string, detail: string, riskLevel: string, agentId: string): Promise<boolean> => {
+    if (!requiresApproval(intent, riskLevel)) return true;
+
+    if (autoApproveDestructive) {
+      // The user approved the whole run before it started, so this line is a record of what
+      // happened, not something that needs an answer. Logging it as a warning made a normal,
+      // already-approved mission look like it was asking for permission on every step.
+      log(`Utför ${intent}: ${detail} (täcks av körningens godkännande)`, "info", agentId);
+      return true;
+    }
+
+    const key = `${intent}\u0000${detail}`;
+    if (deniedThisRun.has(key)) {
+      log(`Refused without asking again: ${intent} — ${detail} was already denied.`, "warning", agentId);
+      return false;
+    }
+    if (!requestApproval) {
+      log(`BLOCKED ${intent} (${detail}): no approval channel on this run.`, "warning", agentId);
+      return false;
+    }
+    log(`Waiting for human approval: ${intent} — ${detail} (risk: ${riskLevel})`, "warning", agentId);
+    const approved = await requestApproval({ intent, detail, riskLevel });
+    ensureNotAborted();
+    if (!approved) deniedThisRun.add(key);
+    log(approved ? `Approved by user: ${intent} — ${detail}` : `Denied by user: ${intent} — ${detail}`, approved ? "success" : "warning", agentId);
+    return approved;
+  };
+
+  const denied = (intent: string, detail: string) => ({
+    ok: false,
+    error:
+      `Denied: ${intent} on ${detail} was not approved by the user. ` +
+      `Do NOT retry this action; choose a different approach or finish with 'done'.`,
+  });
+
+  const requestedSequence = (opts.agentSequence || []).filter((a) => AGENT_PERSONAS[a]);
+  const agentSequence = requestedSequence.length ? requestedSequence : ["scout", "brainstormer", "coder", "reviewer", "auditor", "security"];
   let currentAgentIndex = 0;
 
   const messages: { role: string; content: string }[] = [
@@ -344,12 +634,17 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
       content: JSON.stringify({
         order: mission,
         allowed_sandboxes: sandboxRoots,
-        note: "You have full control over these directories AND ALL THEIR SUBDIRECTORIES. Please use absolute paths (e.g. C:/path/to/dir) when moving/copying between different roots to ensure it goes exactly where you want.",
+        note:
+          "You have full control over these directories AND ALL THEIR SUBDIRECTORIES. Please use absolute paths (e.g. C:/path/to/dir) when moving/copying between different roots to ensure it goes exactly where you want. " +
+          "Anything outside allowed_sandboxes is refused automatically, and permissions cannot be extended while the mission runs — so never ask for another folder. " +
+          "If a path is refused, use the folders in allowed_sandboxes instead, or finish with 'done' and explain what was missing.",
       }),
     },
   ];
 
   let lastSummary = "Mission incomplete.";
+  // Warn about an impractically slow model once per run, not once per step.
+  let warnedAboutSlowModel = false;
 
   for (let step = 0; step < maxSteps; step++) {
     ensureNotAborted();
@@ -359,7 +654,37 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
     log(`Step ${step + 1}: calling Ollama (${currentAgentName})...`, "info", currentAgentId);
     let raw: string;
     try {
-      raw = await ollamaChat(ollamaBaseUrl, ollamaModel, messages, abortSignal);
+      raw = await ollamaChat(
+        ollamaBaseUrl,
+        ollamaModel,
+        messages,
+        abortSignal,
+        (progress) => {
+          const seconds = Math.round(progress.elapsedMs / 1000);
+          if (progress.tokens === 0) {
+            // The model is still reading the prompt. This is the phase that used to look
+            // like a freeze, so say plainly what is happening and for how long.
+            log(`bearbetar uppdraget (modellen läser prompten)… ${seconds} s`, "info", currentAgentId);
+            return;
+          }
+          log(
+            `arbetar… ${progress.tokens} tokens på ${seconds} s (${progress.tokensPerSecond.toFixed(1)} tok/s)`,
+            "info",
+            currentAgentId
+          );
+          if (!warnedAboutSlowModel && progress.tokens >= 40 && progress.tokensPerSecond < SLOW_MODEL_TOKENS_PER_SEC) {
+            warnedAboutSlowModel = true;
+            log(
+              `VARNING: ${ollamaModel} genererar bara ${progress.tokensPerSecond.toFixed(1)} tok/s. ` +
+                `Vid den hastigheten tar en körning med flera agenter timmar. ` +
+                `Välj en mindre Gemma 4-modell i UPPDRAGSMÅL (t.ex. gemma4:e4b) för att slippa vänta.`,
+              "warning",
+              currentAgentId
+            );
+          }
+        },
+        currentAgentId
+      );
     } catch (e: any) {
       if (e?.name === "AbortError" || abortSignal?.aborted) {
         throw e;
@@ -424,14 +749,24 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
 
     if (intent === "ask_user") {
       const q = String(obj.question);
+      // Nobody can answer mid-run (that is the whole point of the up-front approval), so the
+      // answer must be unambiguous: no permission can be granted and here is what IS allowed.
+      // A vague placeholder here is what made a model keep hunting for a folder it could
+      // never get instead of finishing the mission inside the sandbox.
       messages.push({
         role: "user",
         content: JSON.stringify({
           answer:
-            "[UI mode: no stdin — continue with best safe assumption inside sandbox, or done with explanation.]",
+            "Ingen människa kan svara under en pågående körning och behörigheter kan inte ändras. " +
+            `De enda tillåtna mapparna är: ${sandboxRoots.map((r) => `"${r}"`).join(", ")}. ` +
+            "Lös uppdraget inom dem med de verktyg du har, eller avsluta med 'done' och förklara i summary vad som inte gick.",
         }),
       });
-      log(`Model asked: ${q} (auto-reply placeholder sent)`, "warning");
+      log(
+        `Agenten ville fråga: ${q} — inget svar kan ges under körningen, så den hänvisades till de godkända mapparna.`,
+        "info",
+        currentAgentId
+      );
       continue;
     }
 
@@ -476,13 +811,13 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
             listing: listing.slice(0, 8000),
           }),
         });
-        log(`Listed ${rel}`, "success");
+        log(`Listed ${rel}`, "success", currentAgentId);
       } catch (e: any) {
         messages.push({
           role: "user",
           content: JSON.stringify({ ok: false, path: rel, error: String(e.message || e) }),
         });
-        log(`list_dir failed: ${e.message}`, "error");
+        log(`list_dir nekades: ${e.message}`, "error", currentAgentId);
       }
       continue;
     }
@@ -517,6 +852,13 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
+        if (isSandboxRoot(sandboxRoots, safe)) {
+          throw new Error("Förbjudet: Du försöker tömma själva rot-mappen (sandboxen)! Välj en undermapp istället.");
+        }
+        if (!(await gate("empty_dir", rel, String(obj.risk_level), currentAgentId))) {
+          messages.push({ role: "user", content: JSON.stringify({ ...denied("empty_dir", rel), path: rel }) });
+          continue;
+        }
         if (!fs.existsSync(safe)) throw new Error("Path does not exist");
         const entries = fs.readdirSync(safe);
         for (const entry of entries) {
@@ -543,8 +885,12 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
       const rel = String(obj.path);
       try {
         const safe = validateSandboxPath(sandboxRoots, rel);
-        if (sandboxRoots.some(root => path.normalize(root) === safe)) {
-           throw new Error("Förbjudet: Du försöker radera själva rot-mappen (sandboxen)! Om du ska tömma den, använd empty_dir istället.");
+        if (isSandboxRoot(sandboxRoots, safe)) {
+           throw new Error("Förbjudet: Du försöker radera själva rot-mappen (sandboxen)! Välj en undermapp istället.");
+        }
+        if (!(await gate("delete_path", rel, String(obj.risk_level), currentAgentId))) {
+          messages.push({ role: "user", content: JSON.stringify({ ...denied("delete_path", rel), path: rel }) });
+          continue;
         }
         if (!fs.existsSync(safe)) {
           // Alternative fallback for tricky Windows trailing spaces if path is dir contents
@@ -614,6 +960,14 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
         
         if (!fs.existsSync(safeSrc)) {
           throw new Error(`Source path does not exist: ${srcRel}`);
+        }
+
+        if (!(await gate("move_path", `${srcRel} -> ${dstRel}`, String(obj.risk_level), currentAgentId))) {
+          messages.push({
+            role: "user",
+            content: JSON.stringify({ ...denied("move_path", `${srcRel} -> ${dstRel}`), source: srcRel, destination: dstRel }),
+          });
+          continue;
         }
         
         let finalSafeDst = safeDst;
@@ -698,7 +1052,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
 
     if (intent === "bulk_copy") {
       ensureNotAborted();
-      const exts = (obj.extensions as string[] || []).map(e => e.toLowerCase());
+      const exts = normalizeExtensions(obj.extensions);
       const dstRel = String(obj.destination_dir || obj.destination);
       const srcDirRel = String(obj.source_dir || obj.source || ".");
       try {
@@ -729,11 +1083,25 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
             copiedCount++;
           }
         }
+        const copyNote =
+          copiedCount === 0
+            ? `Inga filer matchade ${JSON.stringify(exts)} i ${srcDirRel}. Kontrollera filändelserna (t.ex. [".png"]) och att filerna ligger direkt i mappen — bulk_copy tittar inte i undermappar.`
+            : undefined;
         messages.push({
           role: "user",
-          content: JSON.stringify({ ok: true, source_dir: srcDirRel, destination_dir: dstRel, copied_items: copiedCount }),
+          content: JSON.stringify({
+            ok: true,
+            source_dir: srcDirRel,
+            destination_dir: dstRel,
+            copied_items: copiedCount,
+            ...(copyNote ? { warning: copyNote } : {}),
+          }),
         });
-        log(`Bulk copied ${copiedCount} items (files/dirs) to ${dstRel}`, "success");
+        if (copyNote) {
+          log(`Bulk copy kopierade 0 filer: ${copyNote}`, "warning", currentAgentId);
+        } else {
+          log(`Bulk copied ${copiedCount} items (files/dirs) to ${dstRel}`, "success");
+        }
       } catch (e: any) {
         messages.push({
           role: "user",
@@ -746,7 +1114,7 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
 
     if (intent === "bulk_move") {
       ensureNotAborted();
-      const exts = (obj.extensions as string[] || []).map(e => e.toLowerCase());
+      const exts = normalizeExtensions(obj.extensions);
       const dstRel = String(obj.destination_dir || obj.destination);
       const srcDirRel = String(obj.source_dir || obj.source || ".");
       try {
@@ -754,6 +1122,11 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
         const safeDst = validateSandboxPath(sandboxRoots, dstRel);
         if (!fs.existsSync(safeDst)) {
           fs.mkdirSync(safeDst, { recursive: true });
+        }
+
+        if (!(await gate("bulk_move", `${srcDirRel} -> ${dstRel}`, String(obj.risk_level), currentAgentId))) {
+          messages.push({ role: "user", content: JSON.stringify(denied("bulk_move", `${srcDirRel} -> ${dstRel}`)) });
+          continue;
         }
         
         const files = fs.readdirSync(safeSrcDir, { withFileTypes: true });
@@ -779,11 +1152,24 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
           }
         }
         
+        const moveNote =
+          movedCount === 0
+            ? `Inga filer matchade ${JSON.stringify(exts)} i ${srcDirRel}. Kontrollera filändelserna (t.ex. [".png"]) och att filerna ligger direkt i mappen — bulk_move tittar inte i undermappar.`
+            : undefined;
         messages.push({
           role: "user",
-          content: JSON.stringify({ ok: true, moved_items: movedCount, destination: dstRel }),
+          content: JSON.stringify({
+            ok: true,
+            moved_items: movedCount,
+            destination: dstRel,
+            ...(moveNote ? { warning: moveNote } : {}),
+          }),
         });
-        log(`Bulk moved ${movedCount} items (files/dirs) to ${dstRel}`, "success");
+        if (moveNote) {
+          log(`Bulk move flyttade 0 filer: ${moveNote}`, "warning", currentAgentId);
+        } else {
+          log(`Bulk moved ${movedCount} items (files/dirs) to ${dstRel}`, "success");
+        }
       } catch (e: any) {
         messages.push({
           role: "user",
@@ -800,6 +1186,10 @@ export async function runOllamaAgentLoop(opts: RunOllamaOptions): Promise<string
       const cwdRel = String(obj.cwd || ".");
       try {
         const safeCwd = validateSandboxPath(sandboxRoots, cwdRel);
+        if (!(await gate("run_terminal", argv.join(" "), String(obj.risk_level), currentAgentId))) {
+          messages.push({ role: "user", content: JSON.stringify(denied("run_terminal", argv.join(" "))) });
+          continue;
+        }
         const { code, stdout, stderr } = runTerminalSafe(
           safeCwd,
           argv,

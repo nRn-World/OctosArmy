@@ -1,11 +1,11 @@
-import React, { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import logoImg from "../Logo/OSAI-no-bg (1).ico";
 import { 
   Terminal, 
   Play, 
   Settings, 
   Folder, 
-  FileCode, 
+
   Clock, 
   Activity, 
   CheckCircle2, 
@@ -13,8 +13,8 @@ import {
   Cpu,
   RefreshCw,
   Trash2,
-  ChevronRight,
   ChevronDown,
+  RotateCcw,
   Shield
 } from "lucide-react";
 import { motion, AnimatePresence } from "motion/react";
@@ -24,16 +24,22 @@ import {
   AgentLog,
   AGENT_IDS,
 } from "./services/agentService";
-import { parseJsonResponse } from "./utils/api";
+import { apiFetch } from "./utils/api";
 import { apiUrl } from "./config/apiBase";
+import { DEFAULT_OLLAMA_MODEL, isGemmaModel } from "../ollamaModels.ts";
+
+/** "gemma4:e4b" → "Gemma 4:e4b", so the dropdown reads like the product name. */
+function formatModelLabel(model: string): string {
+  return model.replace(/^gemma4/i, "Gemma 4");
+}
 
 const AGENTS = [
-  { id: "scout", name: "Scouten", icon: Activity, color: "text-blue-400" },
-  { id: "brainstormer", name: "Brainstormern", icon: Cpu, color: "text-purple-400" },
-  { id: "coder", name: "Kodaren", icon: Terminal, color: "text-green-400" },
-  { id: "reviewer", name: "Granskaren", icon: CheckCircle2, color: "text-yellow-400" },
-  { id: "auditor", name: "Auditören", icon: Clock, color: "text-cyan-400" },
-  { id: "security", name: "Säkerhetsspecialisten", icon: Shield, color: "text-red-400" },
+  { id: "scout", name: "Scouten", role: "Skannar och bekräftar var filerna finns", icon: Activity, color: "text-blue-400" },
+  { id: "brainstormer", name: "Brainstormern", role: "Tar fram planen för uppdraget", icon: Cpu, color: "text-purple-400" },
+  { id: "coder", name: "Kodaren", role: "Utför det praktiska arbetet", icon: Terminal, color: "text-green-400" },
+  { id: "reviewer", name: "Granskaren", role: "Kontrollerar och kan avvisa arbetet", icon: CheckCircle2, color: "text-yellow-400" },
+  { id: "auditor", name: "Auditören", role: "Sammanfattar resultatet", icon: Clock, color: "text-cyan-400" },
+  { id: "security", name: "Säkerhetsspecialisten", role: "Slutrapport över vad agenterna gjort", icon: Shield, color: "text-red-400" },
 ];
 
 const THEME = {
@@ -52,7 +58,10 @@ export default function App() {
   const [schedule, setSchedule] = useState("0 * * * *");
   const [mission, setMission] = useState("");
   const [isFetchingLogs, setIsFetchingLogs] = useState(false);
-  const [ollamaModel, setOllamaModel] = useState<"gemma4:e4b" | "deepseek-r1:14b" | "qwen2.5-coder:32b">("gemma4:e4b");
+  const [ollamaModel, setOllamaModel] = useState<string>(DEFAULT_OLLAMA_MODEL);
+  // Gemma 4 models installed in Ollama. The app supports nothing else, so this is the whole
+  // model list the UI can ever offer.
+  const [availableModels, setAvailableModels] = useState<string[]>([DEFAULT_OLLAMA_MODEL]);
   const [isSavingModel, setIsSavingModel] = useState(false);
   const [agentInstructions, setAgentInstructions] = useState<Record<string, string>>({});
   const [agents, setAgents] = useState(AGENTS);
@@ -65,7 +74,6 @@ export default function App() {
   const [selectedTimes, setSelectedTimes] = useState<string[]>(["08:00"]);
   const [workspaceRoots, setWorkspaceRoots] = useState<string[]>([]);
   const [newRootPath, setNewRootPath] = useState("");
-  const [workspaceFiles, setWorkspaceFiles] = useState<{root: string, files: string[]}[]>([]);
   const [isAutoScrollEnabled, setIsAutoScrollEnabled] = useState(true);
   const [selectedAgentFilter, setSelectedAgentFilter] = useState<string | null>(null);
   
@@ -75,9 +83,33 @@ export default function App() {
   const [confirmAcknowledged, setConfirmAcknowledged] = useState(false);
   const [isAddingRoot, setIsAddingRoot] = useState(false);
 
+  // Folder browser. The native dialog only exists in the Electron shell, so in a browser tab
+  // the picker walks the disk through the backend instead of leaving a dead-looking button.
+  const [isBrowserOpen, setIsBrowserOpen] = useState(false);
+  const [browsePath, setBrowsePath] = useState("");
+  const [browseParent, setBrowseParent] = useState<string | null>(null);
+  const [browseHome, setBrowseHome] = useState("");
+  const [browseEntries, setBrowseEntries] = useState<{ name: string; path: string }[]>([]);
+  const [browseInput, setBrowseInput] = useState("");
+  const [browseError, setBrowseError] = useState("");
+  const [isBrowsing, setIsBrowsing] = useState(false);
+
+  // "Start over": clearing the session must never mean touching files on disk.
+  const [showResetConfirm, setShowResetConfirm] = useState(false);
+  const [isResetting, setIsResetting] = useState(false);
+
   // Update states
   const [updateDownloaded, setUpdateDownloaded] = useState<{version: string} | null>(null);
   const [updateAvailable, setUpdateAvailable] = useState<{version: string} | null>(null);
+
+  // Destructive agent actions wait here until the user approves them.
+  const [pendingApproval, setPendingApproval] = useState<{
+    id: string;
+    intent: string;
+    detail: string;
+    riskLevel: string;
+  } | null>(null);
+  const [isRespondingToApproval, setIsRespondingToApproval] = useState(false);
 
   const DAYS = [
     { id: 1, label: "Mån" },
@@ -190,7 +222,7 @@ export default function App() {
     fetchLogs();
     (async () => {
       try {
-        const res = await fetch(apiUrl("/api/schedule"));
+        const res = await apiFetch(apiUrl("/api/schedule"));
         const data = await res.json();
         if (data?.cronExpr) setSchedule(String(data.cronExpr));
         if (!mission.trim() && data?.mission) setMission(String(data.mission));
@@ -198,9 +230,12 @@ export default function App() {
     })();
     (async () => {
       try {
-        const res = await fetch(apiUrl("/api/ollama/model"));
+        const res = await apiFetch(apiUrl("/api/ollama/model"));
         const data = await res.json();
-        if (data?.model) setOllamaModel(String(data.model) as any);
+        if (data?.model) setOllamaModel(String(data.model));
+        if (Array.isArray(data?.available) && data.available.length) {
+          setAvailableModels(data.available.map(String));
+        }
       } catch (e) {}
     })();
     const interval = setInterval(fetchLogs, 5000);
@@ -220,6 +255,26 @@ export default function App() {
       consoleContainerRef.current.scrollTop = consoleContainerRef.current.scrollHeight;
     }
   }, [logs, isAutoScrollEnabled]);
+
+  // Destructive agent intents stop server-side until a human answers. Poll for them
+  // while a run is active so the user sees the request as soon as it appears.
+  useEffect(() => {
+    if (!isRunning) {
+      setPendingApproval(null);
+      return;
+    }
+    const interval = setInterval(async () => {
+      try {
+        const res = await apiFetch(apiUrl("/api/approvals/pending"));
+        if (!res.ok) return;
+        const data = await res.json();
+        setPendingApproval(data?.pending || null);
+      } catch (e) {
+        // Server not ready – keep whatever we already had.
+      }
+    }, 1500);
+    return () => clearInterval(interval);
+  }, [isRunning]);
 
   // Timer logic for confirmations
   useEffect(() => {
@@ -247,17 +302,13 @@ export default function App() {
     try {
       if ((window as any).electron) {
         const roots = await (window as any).electron.getRoots();
-        setWorkspaceRoots(roots || []);
-        const workspaces = await (window as any).electron.getWorkspace();
-        setWorkspaceFiles(workspaces || []);
+        setWorkspaceRoots(Array.isArray(roots) ? roots : []);
         return;
       }
-      const res = await fetch(apiUrl("/api/workspace"));
-      const data = (await parseJsonResponse(res)) as { workspaces: {root: string, files: string[]}[] };
-      setWorkspaceFiles(data.workspaces || []);
-      const rRes = await fetch(apiUrl("/api/workspace/roots"));
+      const rRes = await apiFetch(apiUrl("/api/workspace/roots"));
+      if (!rRes.ok) return;
       const rData = await rRes.json();
-      setWorkspaceRoots(rData.roots || []);
+      setWorkspaceRoots(Array.isArray(rData?.roots) ? rData.roots : []);
     } catch (e: any) {
       console.error(e);
     }
@@ -288,7 +339,7 @@ export default function App() {
         await fetchWorkspace();
         return;
       }
-      const res = await fetch(apiUrl("/api/workspace/roots"), {
+      const res = await apiFetch(apiUrl("/api/workspace/roots"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ roots: [...workspaceRoots, p] }),
@@ -334,12 +385,17 @@ export default function App() {
         await fetchWorkspace();
         return;
       }
-      const res = await fetch(apiUrl("/api/workspace/roots"), {
+      const res = await apiFetch(apiUrl("/api/workspace/roots"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ roots: newRoots }),
       });
-      const data = await res.json();
+      // Only trust a list the server actually accepted. Writing data.roots straight into
+      // state rendered an empty folder list on any error, with nothing said about why.
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !Array.isArray(data?.roots)) {
+        throw new Error(data?.error || `servern svarade ${res.status}`);
+      }
       setWorkspaceRoots(data.roots);
       addLog({
         timestamp: new Date().toISOString(),
@@ -349,8 +405,49 @@ export default function App() {
       });
       await fetchWorkspace();
     } catch (e: any) {
-      console.error(e);
+      // Silence here looked exactly like a dead button.
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Kunde inte ta bort behörigheten för ${p}: ${e.message}`,
+        type: "error",
+      });
     }
+  };
+
+  const loadDirectory = async (target: string) => {
+    setIsBrowsing(true);
+    setBrowseError("");
+    try {
+      const url = target
+        ? apiUrl(`/api/fs/dirs?path=${encodeURIComponent(target)}`)
+        : apiUrl("/api/fs/dirs");
+      const res = await apiFetch(url);
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `servern svarade ${res.status}`);
+      setBrowsePath(String(data.path || ""));
+      setBrowseInput(String(data.path || ""));
+      setBrowseParent(data.parent ?? null);
+      setBrowseHome(String(data.home || ""));
+      setBrowseEntries(Array.isArray(data.dirs) ? data.dirs : []);
+    } catch (e: any) {
+      setBrowseError(e.message || String(e));
+    } finally {
+      setIsBrowsing(false);
+    }
+  };
+
+  const openFolderBrowser = () => {
+    setIsBrowserOpen(true);
+    // Start at the drives; from there the user clicks their way to the folder they want.
+    loadDirectory("");
+  };
+
+  const chooseBrowsedFolder = async () => {
+    if (!browsePath) return;
+    setIsBrowserOpen(false);
+    setNewRootPath(browsePath);
+    await addWorkspacePath(browsePath);
   };
 
   const handleBrowseFolder = async () => {
@@ -370,14 +467,9 @@ export default function App() {
         }
         return;
       }
-      
-      // Fallback to API (for browser/dev mode)
-      const res = await fetch(apiUrl("/api/workspace/pick"), { method: "POST" });
-      const data = await res.json();
-      if (data.path) {
-        setNewRootPath(data.path);
-        addWorkspacePath(data.path);
-      }
+
+      // No native dialog in a browser tab, so browse the disk through the backend.
+      openFolderBrowser();
     } catch (e: any) {
       addLog({
         timestamp: new Date().toISOString(),
@@ -388,11 +480,79 @@ export default function App() {
     }
   };
 
+  const resetProgram = async () => {
+    if (isResetting) return;
+    setIsResetting(true);
+    try {
+      // Stop first: a reset that leaves a mission running in the background is not a reset.
+      emergencyStopRef.current = false;
+      try {
+        runAbortRef.current?.abort();
+      } catch (e) {}
+
+      const res = await apiFetch(apiUrl("/api/reset"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || !data?.ok) throw new Error(data?.error || `servern svarade ${res.status}`);
+
+      // The Electron shell keeps its own copy of the granted folders; the backend's list is
+      // not the only place the permissions live, so both have to be cleared.
+      const bridge = (window as any).electron;
+      if (bridge?.setRoots) {
+        try {
+          await bridge.setRoots([]);
+        } catch (e) {}
+      }
+
+      setWorkspaceRoots(Array.isArray(data.roots) ? data.roots : []);
+      setOllamaModel(data.model || DEFAULT_OLLAMA_MODEL);
+      setAvailableModels(Array.isArray(data.available) && data.available.length ? data.available.map(String) : [DEFAULT_OLLAMA_MODEL]);
+      setMission("");
+      setAgentInstructions({});
+      setActiveAgents(AGENT_IDS);
+      setSchedule("0 * * * *");
+      setSelectedTimes(["08:00"]);
+      setSelectedDays([]);
+      setSelectedMonths([]);
+      setSelectedDom([]);
+      setExpandedAgentId(null);
+      setIsConfigExpanded(false);
+      setIsSchedulerExpanded(false);
+      setSelectedAgentFilter(null);
+      setNewRootPath("");
+      setLogs([]);
+      setIsRunning(false);
+      setPendingApproval(null);
+      setShowConfirm1(false);
+      setTimer1(0);
+      setConfirmAcknowledged(false);
+      setIsBrowserOpen(false);
+      setBrowsePath("");
+      setBrowseEntries([]);
+      setBrowseError("");
+      setShowResetConfirm(false);
+      // The server logged the reset; pick it up so the console shows what just happened.
+      await fetchLogs();
+    } catch (e: any) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Kunde inte nollställa: ${e.message}`,
+        type: "error",
+      });
+    } finally {
+      setIsResetting(false);
+    }
+  };
+
   const fetchLogs = async () => {
     if (isFetchingLogs) return;
     setIsFetchingLogs(true);
     try {
-      const res = await fetch(apiUrl("/api/logs"));
+      const res = await apiFetch(apiUrl("/api/logs"));
       const data = await res.json();
       if (Array.isArray(data)) {
         setLogs(data.slice(-500));
@@ -404,7 +564,15 @@ export default function App() {
     }
   };
 
-  const addLog = async (log: AgentLog) => {
+  const addLog = async (rawLog: AgentLog) => {
+    // Keep payloads bounded: the server caps log entries at 4000 chars and we do not
+    // want a runaway model response to bloat every poll of /api/logs.
+    const log: AgentLog = {
+      ...rawLog,
+      agent: String(rawLog.agent || "System").slice(0, 64),
+      message: String(rawLog.message ?? "").slice(0, 4000),
+    };
+
     // Prevent accidental duplicate warning spam from fast concurrent stop/abort paths.
     if (log.type === "warning") {
       const key = `${log.agent}|${log.message}`;
@@ -419,7 +587,7 @@ export default function App() {
     setLogs(prev => [...prev.slice(-499), log]);
     // Try to sync to server (best-effort)
     try {
-      await fetch(apiUrl("/api/logs"), {
+      await apiFetch(apiUrl("/api/logs"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(log)
@@ -438,7 +606,7 @@ export default function App() {
       type: "info",
     });
     try {
-      const res = await fetch(apiUrl("/api/ollama/health"));
+      const res = await apiFetch(apiUrl("/api/ollama/health"));
       const data = await res.json();
       if (!res.ok || !data.ok) {
         throw new Error(data.error || res.statusText);
@@ -477,12 +645,21 @@ export default function App() {
     }
   };
 
-  const saveOllamaModel = async (model: "gemma4:e4b" | "deepseek-r1:14b" | "qwen2.5-coder:32b") => {
+  const saveOllamaModel = async (model: string) => {
     if (isSavingModel) return;
+    if (!isGemmaModel(model)) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Endast Gemma 4-modeller stöds. ${model} körs inte.`,
+        type: "error",
+      });
+      return;
+    }
     setIsSavingModel(true);
     setOllamaModel(model);
     try {
-      const res = await fetch(apiUrl("/api/ollama/model"), {
+      const res = await apiFetch(apiUrl("/api/ollama/model"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model }),
@@ -507,6 +684,11 @@ export default function App() {
     }
   };
 
+  // The selected model is always shown, even if Ollama could not be reached while listing.
+  const modelOptions = availableModels.includes(ollamaModel)
+    ? availableModels
+    : [ollamaModel, ...availableModels];
+
   const executePipeline = async () => {
     if (isRunning) return;
     emergencyStopRef.current = false;
@@ -530,7 +712,7 @@ export default function App() {
         ? `${mission}\n\nAGENT INSTRUCTIONS:\n${instrLines.join("\n")}`
         : mission;
 
-      await runOllamaServerPipeline(addLog, finalMission, abortController.signal);
+      await runOllamaServerPipeline(addLog, finalMission, abortController.signal, activeAgents);
     } catch (e: any) {
       if (e?.name === "AbortError") {
         if (!emergencyStopRef.current) {
@@ -568,9 +750,38 @@ export default function App() {
       runAbortRef.current?.abort();
     } catch (e) {}
     try {
-      await fetch(apiUrl("/api/agents/abort"), { method: "POST" });
+      // The backend requires a JSON content type on state-changing calls, even when the
+      // payload is empty — otherwise the emergency stop would not reach the server.
+      await apiFetch(apiUrl("/api/agents/abort"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
     } catch (e) {}
     setIsRunning(false);
+  };
+
+  const respondToApproval = async (approved: boolean) => {
+    const current = pendingApproval;
+    if (!current || isRespondingToApproval) return;
+    setIsRespondingToApproval(true);
+    setPendingApproval(null);
+    try {
+      await apiFetch(apiUrl("/api/approvals/respond"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: current.id, approved }),
+      });
+    } catch (e: any) {
+      addLog({
+        timestamp: new Date().toISOString(),
+        agent: "System",
+        message: `Kunde inte skicka svar på godkännandet: ${e.message}`,
+        type: "error",
+      });
+    } finally {
+      setIsRespondingToApproval(false);
+    }
   };
 
   const handleRunPipeline = () => {
@@ -582,14 +793,18 @@ export default function App() {
   const clearLogs = async () => {
     setLogs([]);
     try {
-      await fetch(apiUrl("/api/logs/clear"), { method: "POST" });
+      await apiFetch(apiUrl("/api/logs/clear"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: "{}",
+      });
     } catch (e) {
       // Server sync failed – local clear is sufficient
     }
   };
 
   const updateSchedule = async () => {
-    await fetch(apiUrl("/api/schedule"), {
+    await apiFetch(apiUrl("/api/schedule"), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ cronExpr: schedule, mission })
@@ -668,6 +883,15 @@ export default function App() {
               NÖDSTOPP
             </button>
           )}
+          <button
+            onClick={() => setShowResetConfirm(true)}
+            disabled={isResetting}
+            title="Nollställ programmet: rensa logg, uppdrag, schema, mappar och modellval. Inga filer rörs."
+            className={`flex items-center gap-2 px-3 py-2 rounded-lg border ${THEME.border} bg-white/5 hover:bg-white/10 hover:border-yellow-500/40 text-gray-300 hover:text-yellow-300 text-xs font-bold transition-all ${isResetting ? "opacity-50 cursor-wait" : ""}`}
+          >
+            <RotateCcw className={`w-4 h-4 ${isResetting ? "animate-spin" : ""}`} />
+            NOLLSTÄLL
+          </button>
           <button 
             onClick={handleRunPipeline}
             disabled={isRunning}
@@ -700,6 +924,10 @@ export default function App() {
               {/* Add New Permission */}
               <div className="space-y-3">
                 <label className={`text-[10px] ${THEME.muted} font-bold uppercase tracking-widest block`}>Lägg till ny mappbehörighet</label>
+                <p className={`text-[10px] ${THEME.muted} leading-relaxed`}>
+                  Klicka på mappikonen för att bläddra fram mappen, eller skriv sökvägen direkt i fältet och
+                  tryck LÄGG TILL — mappen skapas om den inte finns.
+                </p>
                 <div className="flex gap-2">
                   <div className="flex-1 group">
                     <input 
@@ -747,9 +975,11 @@ export default function App() {
                     >
                       <div className="flex items-center justify-between mb-3">
                         <span className={`text-[10px] font-black text-blue-500 uppercase tracking-tighter`}>Mapp #{index + 1}</span>
-                        <button 
+                        <button
                           onClick={() => removeWorkspacePath(path)}
-                          className="text-gray-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-all"
+                          title={`Ta bort behörigheten för ${path}`}
+                          aria-label={`Ta bort behörigheten för ${path}`}
+                          className="p-1.5 rounded-lg text-gray-400 hover:text-red-300 hover:bg-red-500/15 transition-all"
                         >
                           <Trash2 className="w-4 h-4" />
                         </button>
@@ -786,14 +1016,16 @@ export default function App() {
               <div className="flex items-center gap-2">
                 <select
                   value={ollamaModel}
-                  onChange={(e) => saveOllamaModel(e.target.value as any)}
+                  onChange={(e) => saveOllamaModel(e.target.value)}
                   disabled={isSavingModel}
                   className={`model-select h-7 bg-black border ${THEME.border} rounded px-2 text-[9px] font-bold uppercase tracking-wider text-[#00FF9D] focus:outline-none focus:border-[#00FF9D]/50 ${isSavingModel ? "opacity-70 cursor-wait" : "cursor-pointer"} [color-scheme:dark]`}
-                  title="Välj Ollama-modell"
+                  title="Välj Gemma 4-modell. Endast Gemma 4 stöds i den här versionen."
                 >
-                  <option value="gemma4:e4b">Gemma 4:e4b</option>
-                  <option value="deepseek-r1:14b">Deepseek-r1:14b</option>
-                  <option value="qwen2.5-coder:32b">Qwen 2.5-Coder:32b</option>
+                  {modelOptions.map((model) => (
+                    <option key={model} value={model}>
+                      {formatModelLabel(model)}
+                    </option>
+                  ))}
                 </select>
                 <button
                   onClick={testAIConnection}
@@ -812,7 +1044,8 @@ export default function App() {
                 placeholder="Beskriv vad agenterna ska göra... (t.ex. 'Hitta och fixa alla minnesläckor')"
               />
               <p className={`text-[9px] ${THEME.muted} italic`}>
-                Dessa instruktioner skickas direkt till Gemma 4-agenterna för analys.
+                Dessa instruktioner skickas direkt till Gemma 4-agenterna för analys. OctosArmy kör
+                endast Gemma 4-modeller ({formatModelLabel(DEFAULT_OLLAMA_MODEL)} är standard).
               </p>
             </div>
           </section>
@@ -1114,7 +1347,7 @@ export default function App() {
                 )}
               </div>
               <button 
-                onClick={() => setLogs([])}
+                onClick={clearLogs}
                 className={`p-1.5 rounded hover:bg-white/5 ${THEME.muted} hover:text-white transition-all`}
                 title="Rensa konsol"
               >
@@ -1186,6 +1419,237 @@ export default function App() {
         </div>
       </main>
 
+      {/* Destructive-action approval: an agent wants to delete/move/run something */}
+      <AnimatePresence>
+        {pendingApproval && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[150] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 20 }}
+              className="w-full max-w-xl bg-[#1A1A1E] border-2 border-red-500/70 rounded-2xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.6)]"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-red-500/10 border border-red-500/30 flex items-center justify-center shrink-0 animate-pulse">
+                  <AlertCircle className="w-6 h-6 text-red-400" />
+                </div>
+                <div className="flex-1 space-y-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">En agent vill utföra en destruktiv åtgärd</h2>
+                    <p className={`text-xs ${THEME.muted} mt-1`}>
+                      Ingenting händer förrän du svarar. Nekas den fortsätter körningen utan åtgärden.
+                    </p>
+                  </div>
+                  <div className="rounded-xl border border-red-500/20 bg-black/40 px-4 py-3 space-y-2">
+                    <p className="text-[10px] uppercase tracking-widest text-red-300 font-bold">
+                      {pendingApproval.intent} · risk {pendingApproval.riskLevel}
+                    </p>
+                    <p className="text-[12px] font-mono text-gray-200 break-all">{pendingApproval.detail}</p>
+                  </div>
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => respondToApproval(false)}
+                      disabled={isRespondingToApproval}
+                      className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-bold transition-all"
+                    >
+                      NEKA
+                    </button>
+                    <button
+                      onClick={() => respondToApproval(true)}
+                      disabled={isRespondingToApproval}
+                      className="flex-1 px-4 py-2.5 rounded-lg bg-red-600 text-white text-xs font-bold hover:bg-red-500 transition-all"
+                    >
+                      TILLÅT
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Reset: back to a clean slate. Says out loud that files are not touched, because that
+          is the one thing a "clear everything" button must never quietly do. */}
+      <AnimatePresence>
+        {showResetConfirm && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[170] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 20 }}
+              className="w-full max-w-xl bg-[#1A1A1E] border-2 border-yellow-500/60 rounded-2xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.6)]"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-yellow-500/10 border border-yellow-500/30 flex items-center justify-center shrink-0">
+                  <RotateCcw className="w-6 h-6 text-yellow-300" />
+                </div>
+                <div className="flex-1 space-y-4">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Nollställ programmet?</h2>
+                    <p className={`text-xs ${THEME.muted} mt-1`}>
+                      Du börjar om från noll, som vid en ny installation.
+                    </p>
+                  </div>
+
+                  <div className="rounded-xl border border-white/10 bg-black/40 px-4 py-3 space-y-2">
+                    <p className="text-[10px] uppercase tracking-widest text-yellow-300 font-bold">Detta rensas</p>
+                    <ul className="text-[11px] text-gray-200 leading-relaxed space-y-1">
+                      <li>• körningen stoppas och loggen töms</li>
+                      <li>• uppdraget, agentinstruktionerna och schemat</li>
+                      <li>• alla mappbehörigheter</li>
+                      <li>• modellvalet (tillbaka till Gemma 4:e4b)</li>
+                    </ul>
+                  </div>
+
+                  <p className="text-[11px] text-[#00FF9D] leading-relaxed">
+                    Dina filer rörs inte. Ingenting raderas, flyttas eller ändras på disken — bara det du
+                    har gett agenterna tillstånd till glöms bort.
+                  </p>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setShowResetConfirm(false)}
+                      disabled={isResetting}
+                      className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-bold transition-all"
+                    >
+                      AVBRYT
+                    </button>
+                    <button
+                      onClick={resetProgram}
+                      disabled={isResetting}
+                      className={`flex-1 px-4 py-2.5 rounded-lg text-xs font-black transition-all ${
+                        isResetting
+                          ? "bg-yellow-500/30 text-black cursor-wait"
+                          : "bg-yellow-500 text-black hover:bg-yellow-400 hover:scale-[1.02] active:scale-95"
+                      }`}
+                    >
+                      {isResetting ? "NOLLSTÄLLER..." : "NOLLSTÄLL"}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Folder picker: the native dialog exists only in the Electron shell, so a browser tab
+          walks the disk through the backend instead of telling the user to type a path. */}
+      <AnimatePresence>
+        {isBrowserOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[160] flex items-center justify-center bg-black/70 backdrop-blur-sm px-6"
+          >
+            <motion.div
+              initial={{ opacity: 0, scale: 0.94, y: 20 }}
+              animate={{ opacity: 1, scale: 1, y: 0 }}
+              exit={{ opacity: 0, scale: 0.94, y: 20 }}
+              className="w-full max-w-2xl bg-[#1A1A1E] border-2 border-[#00FF9D]/40 rounded-2xl p-6 shadow-[0_20px_60px_rgba(0,0,0,0.6)]"
+            >
+              <div className="flex items-start gap-4">
+                <div className="w-12 h-12 rounded-xl bg-[#00FF9D]/10 border border-[#00FF9D]/30 flex items-center justify-center shrink-0">
+                  <Folder className="w-6 h-6 text-[#00FF9D]" />
+                </div>
+                <div className="flex-1 space-y-4 min-w-0">
+                  <div>
+                    <h2 className="text-lg font-bold text-white">Välj en mapp att ge behörighet till</h2>
+                    <p className={`text-xs ${THEME.muted} mt-1`}>
+                      Klicka dig fram till mappen. Behörigheten gäller mappen och allt som ligger under den.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center gap-2 min-w-0">
+                    <button
+                      onClick={() => loadDirectory(browseParent || "")}
+                      disabled={isBrowsing || (!browseParent && !browsePath)}
+                      className="px-3 py-2 rounded-lg border border-white/10 hover:bg-white/5 text-[10px] font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      UPP
+                    </button>
+                    <button
+                      onClick={() => loadDirectory(browseHome)}
+                      disabled={isBrowsing || !browseHome}
+                      className="px-3 py-2 rounded-lg border border-white/10 hover:bg-white/5 text-[10px] font-bold transition-all disabled:opacity-30 disabled:cursor-not-allowed"
+                    >
+                      HEM
+                    </button>
+                    <div className="flex-1 min-w-0 bg-black/40 border border-white/5 rounded-lg px-3 py-2">
+                      <p
+                        className="text-[11px] font-mono text-gray-300 truncate"
+                        title={browsePath || "Den här datorn"}
+                      >
+                        {browsePath || "Den här datorn"}
+                      </p>
+                    </div>
+                  </div>
+
+                  <input
+                    type="text"
+                    value={browseInput}
+                    onChange={(e) => setBrowseInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") loadDirectory(browseInput);
+                    }}
+                    className={`w-full bg-black/40 border ${THEME.border} rounded-lg px-4 py-2 text-[11px] focus:outline-none focus:border-[#00FF9D]/50 font-mono`}
+                    placeholder="Eller klistra in en sökväg och tryck Enter"
+                  />
+
+                  {browseError && <p className="text-[11px] text-red-300 break-all">{browseError}</p>}
+
+                  <div className="max-h-[300px] overflow-y-auto custom-scrollbar rounded-xl border border-white/5 bg-black/30">
+                    {isBrowsing && <p className="p-4 text-[11px] text-gray-500">Läser mappen…</p>}
+                    {!isBrowsing && browseEntries.length === 0 && (
+                      <p className="p-4 text-[11px] text-gray-500">Inga undermappar här.</p>
+                    )}
+                    {!isBrowsing &&
+                      browseEntries.map((entry) => (
+                        <button
+                          key={entry.path}
+                          onClick={() => loadDirectory(entry.path)}
+                          className="w-full flex items-center gap-3 px-4 py-2.5 text-left hover:bg-white/5 transition-all border-b border-white/5 last:border-b-0"
+                        >
+                          <Folder className="w-4 h-4 text-blue-400 shrink-0" />
+                          <span className="text-[12px] font-mono text-gray-200 truncate">{entry.name}</span>
+                        </button>
+                      ))}
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={() => setIsBrowserOpen(false)}
+                      className="flex-1 px-4 py-2.5 rounded-lg border border-white/10 hover:bg-white/5 text-xs font-bold transition-all"
+                    >
+                      AVBRYT
+                    </button>
+                    <button
+                      onClick={chooseBrowsedFolder}
+                      disabled={!browsePath}
+                      className="flex-1 px-4 py-2.5 rounded-lg bg-[#00FF9D] text-black text-xs font-black transition-all hover:scale-[1.02] active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:scale-100"
+                    >
+                      VÄLJ DEN HÄR MAPPEN
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* Confirmation HUD 1 */}
       <AnimatePresence>
         {showConfirm1 && (
@@ -1228,6 +1692,10 @@ export default function App() {
                       OctosArmy tillhandahålls i befintligt skick och tar inget ansvar för filer som redigeras, flyttas
                       eller raderas, eller för eventuell dataförlust. Säkerhetskopiera vid behov och kontrollera att du
                       har valt rätt mappar/behörigheter innan du godkänner.
+                    </p>
+                    <p className="mt-2 text-[11px] text-[#00FF9D] leading-relaxed">
+                      Godkännandet gäller hela körningen. När du har tryckt GODKÄNN arbetar agenterna vidare
+                      utan fler frågor — varje flytt, radering och tömning loggas i konsolen medan den sker.
                     </p>
                     <label className="mt-3 flex items-start gap-3 text-[11px] text-gray-200 select-none">
                       <input

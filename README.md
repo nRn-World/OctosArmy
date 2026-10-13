@@ -11,6 +11,7 @@
 *   **Hierarchical Agent Team:** Scout, Brainstormer, Coder, Reviewer, Auditor, and Security Specialist collaborate to solve your tasks.
 *   **Secure Sandbox (Folder Permissions):** AI agents can *only* touch folders you have explicitly granted them access to.
 *   **Self-Correcting Logic:** If Agent 4 (Reviewer) is not satisfied with the work, the mission is automatically sent back to Agent 1 for a restart.
+*   **Gemma 4 Only:** The agents run on Gemma 4 models and nothing else — the app refuses every other model, so a slow 32B reasoning model can never be selected by mistake.
 *   **Local AI Engine:** All processing runs locally on your machine via Ollama for maximum privacy.
 *   **Advanced Scheduling:** Run your AI pipelines automatically based on time or events.
 *   **Runs in the Background:** Minimizes to the system tray to quietly monitor and run scheduled missions without interrupting you.
@@ -41,25 +42,34 @@ OctosArmy requires a local AI engine to function.
 ### 1. Install Ollama
 Download and install **Ollama** from [ollama.com](https://ollama.com).
 
-### 2. Pull Models
-Open your terminal (PowerShell or CMD) and run the following commands to download the models you want to use (at least one):
+### 2. Pull the Model
+Open your terminal (PowerShell or CMD) and run:
 ```bash
 ollama pull gemma4:e4b
-ollama pull deepseek-r1:14b
-ollama pull qwen2.5-coder:32b
 ```
+
+**OctosArmy runs Gemma 4 and nothing else.** Requests for any other model are refused by the
+API, and a model from an older version (Deepseek, Qwen) is ignored on start instead of being
+run. Pull more than one Gemma 4 tag (for example `gemma4:12b`) if you want to be able to switch
+between them.
 
 ### 3. Install OctosArmy
 Download the latest version from [Releases](../../releases) and run `OctosArmy-Setup-<version>.exe`.
 
-When the app starts, you can choose which model the agents should use directly in the UI.
+When the app starts, the dropdown in the mission panel lists the Gemma 4 models you have
+installed, and the default one is used until you pick another.
 
 ---
 
 ## 🧾 Versions
 
+### v1.1.37
+*   **Gemma 4 Only:** OctosArmy runs Gemma 4 models and nothing else. The selector lists the Gemma 4 tags installed in Ollama, and everything else is refused — both in the UI and in the API. A model choice saved by an earlier version (Deepseek, Qwen) is discarded and replaced by `gemma4:e4b`.
+*   **NOLLSTÄLL (Reset):** One button returns the app to a clean slate — the run stops, the log, mission, agent instructions, schedule and folder permissions are cleared and the model goes back to the default. The confirmation dialog states plainly that your files are not touched, and nothing on disk is deleted, moved or changed.
+*   **Folder picker in the browser:** When the UI runs in a plain browser tab, where the native folder dialog does not exist, you can now click your way to a folder instead of typing a path.
+
 ### v1.1.36
-*   **Ollama Model Selector:** Choose a model directly in the app (Gemma 4:e4b, Deepseek-r1:14b, Qwen 2.5-Coder:32b).
+*   **Ollama Model Selector:** Choose between Gemma 4:e4b, Deepseek-r1:14b and Qwen 2.5-Coder:32b directly in the app.
 *   **Persistence:** Your model choice is saved locally and used for all agent runs.
 
 ## 👩‍💻 For Developers (Development Setup)
@@ -93,7 +103,7 @@ npm run dev
 ## 🛠 Tech Stack
 *   **Frontend:** React, Tailwind CSS, Motion (motion/react)
 *   **Backend:** Node.js (Express), Electron
-*   **AI:** Ollama (Gemma 4:e4b / Deepseek-r1:14b / Qwen 2.5-Coder:32b)
+*   **AI:** Ollama (Gemma 4 only, default `gemma4:e4b`)
 *   **Infrastructure:** IPC Bridge for secure Windows communication
 
 ---
@@ -107,6 +117,52 @@ We welcome contributions! OctosArmy is built to grow.
 
 ## 🛡 Security
 Your privacy is our priority. Because OctosArmy runs locally, no file data is sent to the cloud. Read more in our [SECURITY.md](SECURITY.md).
+
+---
+
+---
+
+## 🔐 How the sandbox actually protects you
+
+*   **One approval per run, then the agents work undisturbed.** You accept the terms once
+    before a mission starts; after that, deleting, emptying, moving and running commands go
+    ahead without further dialogs. Every one of them is still written to the console while
+    it happens, and NÖDSTOPP aborts the run at any point. A client that calls the API
+    without that up-front approval is still asked before each destructive action.
+*   **Scheduled missions are read-only.** A cron run has no window to ask you anything, so
+    destructive actions are refused instead of executed behind your back.
+*   **The local API is not reachable from websites.** It answers only loopback requests,
+    only from pages it serves itself, and only with a session token generated fresh on each
+    start — so a random page in your browser cannot read or delete your files.
+*   **Approved folders are still powerful.** Granting a folder grants everything under it.
+    Approve narrow folders deliberately, and keep backups of anything irreplaceable.
+
+Full threat model and known residual risks: [SECURITY.md](SECURITY.md).
+
+---
+
+## ⏳ If a mission seems to stall
+
+The mission console now reports live progress for every model call — how long the model has
+been reading the prompt, how many tokens it has produced, and at what speed. If the speed is
+below `8 tok/s` you get a warning, because the whole run will take hours.
+
+Model size dominates everything else. Measured on one machine, with the same prompt:
+
+| Model | Generation speed |
+| --- | --- |
+| `deepseek-r1:14b` (no longer supported) | ~0.6–2.2 tok/s |
+| `gemma4:e4b` | ~93 tok/s |
+
+A model larger than your VRAM spills onto the CPU, and reasoning models spend hundreds of
+tokens thinking before they answer. OctosArmy therefore accepts only the Gemma 4 family, and
+within it you should pick the smallest tag that does the job: `gemma4:e4b` is far faster than a
+large Gemma 4 variant on the same hardware.
+
+Per-call limits are configurable in `.env`: `OCTOSARMY_OLLAMA_TIMEOUT` (hard ceiling, default
+900 s) and `OCTOSARMY_OLLAMA_STALL` (default 90 s without a single token). A run also stops by
+itself if the window that started it goes away, so an abandoned mission can never keep the
+app locked to "A run is already in progress".
 
 ---
 

@@ -35,7 +35,8 @@ def load_settings(
         base = "http://localhost:11434"
     model = (ollama_model or os.environ.get("OLLAMA_MODEL", "")).strip()
     if not model:
-        model = "gemma2:9b"
+        # OctosArmy runs Gemma 4 only; other families are not supported.
+        model = "gemma4:e4b"
     max_steps = int(os.environ.get("OCTOSYNC_MAX_STEPS", "24"))
     timeout = int(os.environ.get("OCTOSYNC_TERMINAL_TIMEOUT", "120"))
     max_out = int(os.environ.get("OCTOSYNC_MAX_TERMINAL_OUTPUT", "50000"))

@@ -1,4 +1,4 @@
-import { parseJsonResponse } from "../utils/api";
+import { apiFetch, parseJsonResponse } from "../utils/api";
 import { apiUrl } from "../config/apiBase";
 
 export interface AgentLog {
@@ -23,7 +23,8 @@ export function useOllamaEngine(): boolean {
 export async function runOllamaServerPipeline(
   onLog: (log: AgentLog) => void,
   mission: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  agents?: string[]
 ): Promise<{ summary: string }> {
   onLog({
     timestamp: new Date().toISOString(),
@@ -31,10 +32,16 @@ export async function runOllamaServerPipeline(
     message: "Using local Ollama engine (server-side tool loop).",
     type: "info",
   });
-  const res = await fetch(apiUrl("/api/agents/run-ollama"), {
+  const res = await apiFetch(apiUrl("/api/agents/run-ollama"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ mission }),
+    body: JSON.stringify({
+      mission,
+      ...(agents && agents.length ? { agents } : {}),
+      // This is only reached after the user accepted the up-front confirmation, so the
+      // destructive steps in this run are covered and must not stop for more questions.
+      approvedDestructive: true,
+    }),
     signal,
   });
   let data: any;
